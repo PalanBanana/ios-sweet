@@ -8,3 +8,11 @@ shim/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
+
+# device dumps (boot images, DTBs, firmware, persist) and CI downloads kept in the work tree: never commit
+/phone-dump/
+/build-log/
+/buildtree-artifact/
+/kernel-artifact/
+/run.log
+/*.build-tail.txt
