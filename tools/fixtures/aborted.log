@@ -1,0 +1,21 @@
+build	Set up job	2026-10-19T12:00:01.0000000Z Current runner version: '2.322.0'
+build	Set up job	2026-10-19T12:00:02.0000000Z Operating System
+build	Set up job	2026-10-19T12:00:03.0000000Z ##[group]Runner Image
+build	Set up job	2026-10-19T12:00:04.0000000Z ##[endgroup]
+build	actions/checkout@v4	2026-10-19T12:00:05.0000000Z ##[group]Run actions/checkout@v4
+build	actions/checkout@v4	2026-10-19T12:00:06.0000000Z ##[endgroup]
+build	Fetch build script	2026-10-19T12:00:07.0000000Z ##[group]Run git init -q dxb
+build	Fetch build script	2026-10-19T12:00:08.0000000Z ##[endgroup]
+build	Fetch build script	2026-10-19T12:00:09.0000000Z patches  README.md  build.sh
+build	Deps	2026-10-19T12:00:10.0000000Z ##[group]Run brew install jq gum bash cmake ninja
+build	Deps	2026-10-19T12:00:11.0000000Z ##[endgroup]
+build	Deps	2026-10-19T12:00:12.0000000Z ==> Downloading bottles
+build	Deps	2026-10-19T12:00:13.0000000Z DEVELOPER_DIR=/Applications/Xcode_15.4.app/Contents/Developer
+build	Build	2026-10-19T12:03:40.0000000Z ##[group]Run set -o pipefail
+build	Build	2026-10-19T12:03:41.0000000Z ##[endgroup]
+build	Build	2026-10-19T12:03:42.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0019-stage-libpthread.sh
+build	Build	2026-10-19T12:03:43.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0020-stage-bearssl.sh
+build	Build	2026-10-19T12:03:44.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0026-stage-hfs.sh
+build	Build	2026-10-19T12:03:45.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0001-new-clang-drop-removed-auto-var-init-flag.patch
+build	Build	2026-10-19T12:03:46.0000000Z ##[error]The runner has received a shutdown signal. This can be caused by a timeout, an unhandled exception or an out-of-memory condition.
+build	Build	2026-10-19T12:03:47.0000000Z ##[error]The operation was canceled.

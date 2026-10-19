@@ -1,0 +1,123 @@
+build	Set up job	2026-10-19T12:00:01.0000000Z Current runner version: '2.322.0'
+build	Set up job	2026-10-19T12:00:02.0000000Z Operating System
+build	Set up job	2026-10-19T12:00:03.0000000Z ##[group]Runner Image
+build	Set up job	2026-10-19T12:00:04.0000000Z ##[endgroup]
+build	actions/checkout@v4	2026-10-19T12:00:05.0000000Z ##[group]Run actions/checkout@v4
+build	actions/checkout@v4	2026-10-19T12:00:06.0000000Z ##[endgroup]
+build	Fetch build script	2026-10-19T12:00:07.0000000Z ##[group]Run git init -q dxb
+build	Fetch build script	2026-10-19T12:00:08.0000000Z ##[endgroup]
+build	Fetch build script	2026-10-19T12:00:09.0000000Z patches  README.md  build.sh
+build	Deps	2026-10-19T12:00:10.0000000Z ##[group]Run brew install jq gum bash cmake ninja
+build	Deps	2026-10-19T12:00:11.0000000Z ##[endgroup]
+build	Deps	2026-10-19T12:00:12.0000000Z ==> Downloading bottles
+build	Deps	2026-10-19T12:00:13.0000000Z DEVELOPER_DIR=/Applications/Xcode_15.4.app/Contents/Developer
+build	Build	2026-10-19T12:03:48.0000000Z ##[group]Run set -o pipefail
+build	Build	2026-10-19T12:03:49.0000000Z ##[endgroup]
+build	Build	2026-10-19T12:03:50.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0019-stage-libpthread.sh
+build	Build	2026-10-19T12:03:51.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0020-stage-bearssl.sh
+build	Build	2026-10-19T12:03:52.0000000Z [35;01m ⇒ [0mRunning script: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0026-stage-hfs.sh
+build	Build	2026-10-19T12:03:53.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0001-new-clang-drop-removed-auto-var-init-flag.patch
+build	Build	2026-10-19T12:03:54.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0002-new-clang-backport-UIO_STACKBUF.patch
+build	Build	2026-10-19T12:03:55.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0003-sweet-framebuffer-serial-console.patch
+build	Build	2026-10-19T12:03:56.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0004-sweet-machine-config.patch
+build	Build	2026-10-19T12:03:57.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0005-non-pac-build-fixes.patch
+build	Build	2026-10-19T12:03:58.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0006-sweet-master-config-open-source-asm-pmap.patch
+build	Build	2026-10-19T12:03:59.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0007-sweet-stub-apple-internal-headers.patch
+build	Build	2026-10-19T12:04:00.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0008-sweet-fill-closed-lib-gaps-kpc-stub.patch
+build	Build	2026-10-19T12:04:01.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0009-sweet-drop-apple-soc-only-exports.patch
+build	Build	2026-10-19T12:04:02.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0010-sweet-early-framebuffer-debug.patch
+build	Build	2026-10-19T12:04:03.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0011-sweet-physmap-alignment-padding.patch
+build	Build	2026-10-19T12:04:04.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0012-sweet-keep-debug-console-after-ttbr0.patch
+build	Build	2026-10-19T12:04:05.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0013-sweet-kmem-rng-without-corecrypto.patch
+build	Build	2026-10-19T12:04:06.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0014-sweet-kernel-hmac-prng.patch
+build	Build	2026-10-19T12:04:07.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0015-sweet-unavailable-trust-cache-runtime.patch
+build	Build	2026-10-19T12:04:08.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0016-sweet-device-tree-platform-expert.patch
+build	Build	2026-10-19T12:04:09.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0017-sweet-device-tree-virtual-timer-irq.patch
+build	Build	2026-10-19T12:04:10.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0018-sweet-boot-cpu-driver.patch
+build	Build	2026-10-19T12:04:11.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0019-sweet-builtin-pthread.patch
+build	Build	2026-10-19T12:04:12.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0020-sweet-portable-aes-cbc.patch
+build	Build	2026-10-19T12:04:13.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0021-sweet-mockfs-ramdisk-root.patch
+build	Build	2026-10-19T12:04:14.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0022-sweet-ramdisk-root-without-iomedia.patch
+build	Build	2026-10-19T12:04:15.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0023-sweet-builtin-sha256-for-libkern.patch
+build	Build	2026-10-19T12:04:16.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0024-sweet-mockfs-virtual-ramdisk-io.patch
+build	Build	2026-10-19T12:04:17.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0025-sweet-builtin-amfi-no-entitlements.patch
+build	Build	2026-10-19T12:04:18.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0026-sweet-builtin-hfs.patch
+build	Build	2026-10-19T12:04:19.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0027-sweet-bearssl-md5.patch
+build	Build	2026-10-19T12:04:20.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0028-sweet-ufs-root-device.patch
+build	Build	2026-10-19T12:04:21.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0029-sweet-unsealed-root-volume.patch
+build	Build	2026-10-19T12:04:22.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0030-sweet-ufs-writes.patch
+build	Build	2026-10-19T12:04:23.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0031-sweet-read-write-root.patch
+build	Build	2026-10-19T12:04:24.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0032-sweet-bearssl-sha1.patch
+build	Build	2026-10-19T12:04:25.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0033-sweet-bearssl-sha384-sha512.patch
+build	Build	2026-10-19T12:04:26.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0034-sweet-ufs-dma-above-4g.patch
+build	Build	2026-10-19T12:04:27.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0035-sweet-amfi-entitlements-platform-binaries.patch
+build	Build	2026-10-19T12:04:28.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0036-sweet-amfi-cs-signed.patch
+build	Build	2026-10-19T12:04:29.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0037-sweet-config-bindfs.patch
+build	Build	2026-10-19T12:04:30.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0038-sweet-applekeystore.patch
+build	Build	2026-10-19T12:04:31.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0039-sweet-coredump-default-off.patch
+build	Build	2026-10-19T12:04:32.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0040-sweet-iowatchdog.patch
+build	Build	2026-10-19T12:04:33.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0041-sweet-hfs-link-notes.patch
+build	Build	2026-10-19T12:04:34.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0042-sweet-short-exec-log.patch
+build	Build	2026-10-19T12:04:35.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0043-sweet-console-crash-log.patch
+build	Build	2026-10-19T12:04:36.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0044-sweet-crash-log-reason.patch
+build	Build	2026-10-19T12:04:37.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0045-sweet-iowatchdog-pmu-primary.patch
+build	Build	2026-10-19T12:04:38.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0046-sweet-iosurface-iomfb.patch
+build	Build	2026-10-19T12:04:39.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0047-sweet-persistent-console-log.patch
+build	Build	2026-10-19T12:04:40.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0048-sweet-devnull-tee.patch
+build	Build	2026-10-19T12:04:41.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0049-sweet-iokit-trace.patch
+build	Build	2026-10-19T12:04:42.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0050-sweet-sandbox-policy.patch
+build	Build	2026-10-19T12:04:43.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0051-sweet-crash-heap-strings.patch
+build	Build	2026-10-19T12:04:44.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0052-sweet-hfs-rename-swap.patch
+build	Build	2026-10-19T12:04:45.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0053-sweet-crash-scan-springboard.patch
+build	Build	2026-10-19T12:04:46.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0054-sweet-process-sampler.patch
+build	Build	2026-10-19T12:04:47.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0055-sweet-aks-ext-state-sampler-depth.patch
+build	Build	2026-10-19T12:04:48.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0056-sweet-fb-throttled-present.patch
+build	Build	2026-10-19T12:04:49.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0057-sweet-no-ext-resolver.patch
+build	Build	2026-10-19T12:04:50.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0058-sweet-hid-event-services.patch
+build	Build	2026-10-19T12:04:51.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0059-sweet-iphone-identity.patch
+build	Build	2026-10-19T12:04:52.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0060-sweet-keys-touch-drivers.patch
+build	Build	2026-10-19T12:04:53.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0061-sweet-iphone-x-display-size.patch
+build	Build	2026-10-19T12:04:54.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0062-sweet-touch-power-battery.patch
+build	Build	2026-10-19T12:04:55.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0063-sweet-goodix-geni-packing.patch
+build	Build	2026-10-19T12:04:56.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0064-sweet-priv-work-interval.patch
+build	Build	2026-10-19T12:04:57.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0065-sweet-smp-psci.patch
+build	Build	2026-10-19T12:04:58.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0066-sweet-crash-fault-region.patch
+build	Build	2026-10-19T12:04:59.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0067-sweet-console-mute.patch
+build	Build	2026-10-19T12:05:00.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0068-sweet-surface-lookup-cached.patch
+build	Build	2026-10-19T12:05:01.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0069-sweet-ufs-faster.patch
+build	Build	2026-10-19T12:05:02.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0070-sweet-pid-hibernate.patch
+build	Build	2026-10-19T12:05:03.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0071-sweet-touch-edge.patch
+build	Build	2026-10-19T12:05:04.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0072-sweet-usb-probe.patch
+build	Build	2026-10-19T12:05:05.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0073-sweet-usb-device-ep0.patch
+build	Build	2026-10-19T12:05:06.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0074-sweet-usb-vbus-override.patch
+build	Build	2026-10-19T12:05:07.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0075-sweet-usb-ecm.patch
+build	Build	2026-10-19T12:05:08.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0076-sweet-usb-rx-mbuf.patch
+build	Build	2026-10-19T12:05:09.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0077-sweet-usb-live-log.patch
+build	Build	2026-10-19T12:05:10.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0078-sweet-smp-8-cores.patch
+build	Build	2026-10-19T12:05:11.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0079-sweet-display-power.patch
+build	Build	2026-10-19T12:05:12.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0080-sweet-net-trace.patch
+build	Build	2026-10-19T12:05:13.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0081-sweet-usb-link-state.patch
+build	Build	2026-10-19T12:05:14.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0082-sweet-gpu-adreno618.patch
+build	Build	2026-10-19T12:05:15.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0083-sweet-wifi-wcn3990.patch
+build	Build	2026-10-19T12:05:16.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/0084-sweet-audio-wcd9375.patch
+build	Build	2026-10-19T12:05:17.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/kas_info.patch
+build	Build	2026-10-19T12:05:18.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/machine_routines.patch
+build	Build	2026-10-19T12:05:19.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/skywalk_ventura.patch
+build	Build	2026-10-19T12:05:20.0000000Z [35;01m ⇒ [0mApplying patch: /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/syntax_checker_ventura.patch
+build	Build	2026-10-19T12:05:21.0000000Z [33;01m[warning] [0mSkipping patch /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/TrustCache.patch (already upstream, previously applied, or malformed): error: patch failed: continuation
+build	Build	2026-10-19T12:05:22.0000000Z [33;01m[warning] [0mSkipping patch /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/iobuffermemd_monterey.patch (already upstream, previously applied, or malformed): error: patch failed: continuation
+build	Build	2026-10-19T12:05:23.0000000Z [33;01m[warning] [0mSkipping patch /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/skywalk_sonoma.patch (already upstream, previously applied, or malformed): error: patch failed: continuation
+build	Build	2026-10-19T12:05:24.0000000Z [33;01m[warning] [0mSkipping patch /Users/runner/work/ios-sweet/ios-sweet/dxb/patches/syntax_checker_sonoma.patch (already upstream, previously applied, or malformed): error: patch failed: continuation
+build	Build	2026-10-19T12:05:25.0000000Z /Users/runner/work/ios-sweet/ios-sweet/dxb/xnu/iokit/Kernel/arm/SweetGPU.cpp:121:9: error: use of undeclared identifier 'kRbbmFoo'
+build	Build	2026-10-19T12:05:26.0000000Z   121 |     writeReg(kRbbmFoo, 0);
+build	Build	2026-10-19T12:05:27.0000000Z make: *** [/Users/runner/work/ios-sweet/ios-sweet/dxb/build/xnu.obj/SWEET_ARM64/SweetGPU.cpp.o] Error 1
+build	Build	2026-10-19T12:05:28.0000000Z make: *** [all] Error 2
+build	Build	2026-10-19T12:05:29.0000000Z ##[error]Process completed with exit code 2.
+build	Verify patch application	2026-10-19T12:05:30.0000000Z ##[group]Run tools/check-patch-log.sh dxb/build.log xnu/patches
+build	Verify patch application	2026-10-19T12:05:31.0000000Z ##[endgroup]
+build	Verify patch application	2026-10-19T12:05:32.0000000Z SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3
+build	Upload build log	2026-10-19T12:00:14.0000000Z With the provided path, there will be 1 file uploaded
+build	Upload build log	2026-10-19T12:00:15.0000000Z Artifact xnu-build-log.zip successfully finalized
+build	Package build tree for local compiles	2026-10-19T12:00:16.0000000Z -rw-r--r-- buildtree.tgz
+build	Collect	2026-10-19T12:00:17.0000000Z total 0
+build	Collect	2026-10-19T12:00:18.0000000Z SHA256SUMS
