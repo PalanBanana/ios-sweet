@@ -7,6 +7,8 @@
 
 ## 0. 반드시 읽기
 
+실행 전에 `CI-PRECHECK.md`의 여덟 항목을 확인한다. 로컬 컴파일과 QEMU는 첫 CI run 전에는 검증되지 않는다 (입력 부재).
+
 실행이 실패하면 `CI-FAILURE-PLAYBOOK.md`를 따른다. 분류 표, 로그 회수 명령, 시나리오별 대응이 있다.
 
 - **`origin`은 업스트림 `dipa-studio/ios-sweet`다 (fetch와 push 모두).** 이 저장소에서 `git push`를 인자 없이 실행하거나 `git push origin ...`을 쓰면 업스트림으로 간다. 하지 말 것.
