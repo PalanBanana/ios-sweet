@@ -1,5 +1,22 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 현재 상태 요약 (2026-10-19, 트리아지)
+
+- **완료 (소스 확정):** 0082 GPU 레지스터·리셋·CP_RB_CNTL(0x20C)·칩 ID 종결. 0083 Wi-Fi를 SNOC+QMI 구조로 재작성 (레일 이름 확정, `sweetwifi=1`은 QRTR 부재로 거부).
+- **미완료 (HW bring-up):** GPU GBIF 값(LLCC slice id), NO_UPDATE 비트, 프레임 제출 설계(IB). Wi-Fi 전원·QMI 실구현. 세 부트 인수 게이트의 실기 검증.
+- **블로커 (인프라, defer):** QRTR/remoteproc (Wi-Fi). SoundWire 슬레이브 설계 (Audio, 0084 미착수). SSD 미마운트 (펌웨어 blob, DT 전압).
+- **검증 상태:** 패치 체인 0001–0084는 `git apply --check`만 통과 (정적). 0080까지 CI 빌드 기록, 0081 기록 없음, 0082–0084 미컴파일.
+- **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
+
+드라이버별 상태:
+
+| 드라이버 | 상태 | 막힌 곳 |
+|---|---|---|
+| 0082 GPU (`MsmGpuAdreno618`) | 소스 확정 완료, HW bring-up 대기 | GBIF 값, NO_UPDATE, IB 설계, SSD |
+| 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
+| 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
+
+
 ### P0 + session 3 (2026-10-19): GPU closed, Wi-Fi rewritten to SNOC+QMI
 
 Sources: xnu-8796.141.3 (`apple-oss-distributions/xnu`), Mesa `src/freedreno/registers/adreno/*.xml`, torvalds/linux (`drivers/gpu/drm/msm/`, `drivers/net/wireless/ath/ath10k/`, `sound/soc/codecs/wcd937x*`). Local only under `~/refs/`.
