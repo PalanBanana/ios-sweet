@@ -128,6 +128,12 @@ check "empty log" 1 "stage scripts ran 0 of $scripts_n" "$tmp/c.log"
 # 12. build log missing
 check "build log missing" 1 "build log not found" "$tmp/nope.log" "" ""
 
+# 12b. build log present but not readable (must fail cleanly, not by accident)
+cp "$tmp/base.log" "$tmp/unread.log"
+chmod 000 "$tmp/unread.log"
+check "build log not readable" 1 "build log not readable" "$tmp/unread.log" "" ""
+chmod 644 "$tmp/unread.log"
+
 # 13. patch directory missing
 check "patch dir missing" 1 "patch dir not found" "$tmp/base.log" "$tmp/nope-dir"
 

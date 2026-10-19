@@ -27,6 +27,10 @@ if [ ! -f "$log" ]; then
 	echo "SWEET_PATCH_SUMMARY: result=FAIL build log not found: $log"
 	exit 1
 fi
+if [ ! -r "$log" ]; then
+	echo "SWEET_PATCH_SUMMARY: result=FAIL build log not readable: $log"
+	exit 1
+fi
 if [ ! -d "$pdir" ]; then
 	echo "SWEET_PATCH_SUMMARY: result=FAIL patch dir not found: $pdir"
 	exit 1
