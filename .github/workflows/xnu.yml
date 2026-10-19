@@ -72,7 +72,15 @@ jobs:
         env:
           # keep going after errors so one run reports every compile failure
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
-        run: bash build.sh
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee build.log
+
+      # build.sh only warns when a patch does not apply, so a green build can
+      # still lack patches. Fail here unless every patch in this repo applied.
+      - name: Verify patch application
+        if: always()
+        run: tools/check-patch-log.sh dxb/build.log xnu/patches
 
       - name: Package build tree for local compiles
         if: always()
