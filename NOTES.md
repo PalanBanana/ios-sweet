@@ -5,10 +5,11 @@
 - **완료 (소스 확정):** 0082 GPU 레지스터·리셋·CP_RB_CNTL(0x20C)·칩 ID 종결. 0083 Wi-Fi를 SNOC+QMI 구조로 재작성 (레일 이름 확정, `sweetwifi=1`은 QRTR 부재로 거부).
 - **미완료 (HW bring-up):** GPU GBIF 값(LLCC slice id), NO_UPDATE 비트, 프레임 제출 설계(IB). Wi-Fi 전원·QMI 실구현. 세 부트 인수 게이트의 실기 검증.
 - **블로커 (인프라, defer):** QRTR/remoteproc (Wi-Fi). SoundWire 슬레이브 설계 (Audio, 0084 미착수). SSD 미마운트 (펌웨어 blob, DT 전압).
-- **검증 상태:** 패치 체인 0001–0084는 `git apply --check`만 통과 (정적). 0080까지 CI 빌드 기록, 0081 기록 없음, 0082–0084 미컴파일.
+- **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
-- **GPU는 설계상 비활성 (세션 6, 2026-10-19):** `sweetgpu=1`로 게이트를 열어도 `loadZapFirmware`가 항상 실패하므로 레지스터 쓰기가 일어나지 않는다. zap 블롭 로더가 생길 때까지 GPU는 inert다. `sweetgpu=1`로 부팅했는데 GPU가 동작하지 않는 것은 정상이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다. 운영 규칙은 `sweetgpu=1`만 쓰는 것이다.
+- **세션 12 (2026-10-19): 0082 GPU 재작성 (`f6bdb2b`).** DT 값으로 다시 썼다. 확정 값, 브리프 정정, 미확정 목록은 아래 '세션 12' 절.
+- **GPU 게이트 (세션 12에서 정정; 세션 6 문구는 틀렸다):** `sweetgpu=1`로 게이트가 열리면 이제 레지스터를 쓴다 (RBBM 리셋, INT 마스크, SECVID, CP_RB_BASE/CNTL/WPTR). zap 로더는 없고 `kIOReturnUnsupported`를 돌려주며, 이를 Linux의 `-ENODEV` 경로로 처리해 계속한다. 첫 쓰기는 전원·클록이 꺼진 GPU에서 버스 폴트를 일으킬 수 있다. 게이트 바깥에서는 레지스터를 건드리지 않는다. 운영 규칙은 그대로 `sweetgpu=1`만 쓰는 것이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다.
 - **세션 8 (2026-10-19): 정적 컴파일 대조.** 0082–0084를 적용된 트리에서 xnu-8796.141.3 헤더와 대조했다 (include 27개, XNU 이름 30개, 멤버 시그니처 39개, 호출 79건, 접근성, 매크로 충돌). **확정 오류 0건, 수정 0건.** 컴파일은 하지 않았다. 실제 검증은 첫 CI run이다. 남은 likely-error: 없음. 한계와 근거는 `CI-PRECHECK.md` 세션 8 절. `tools/xnu-cc.py`는 환경변수 오버라이드가 없고 (`CLANG`, `CI_DXB` 하드코딩), `--help`도 없다. 수정 제안 3개는 `CI-PRECHECK.md`에 있고 적용하지 않았다. **스위프트 clang과 qemu 설치는 첫 CI run 후로 연기.** 근거: `xnu-cc.py`는 CI 로그와 buildtree가 없으면 한 줄도 검사하지 못하고, QEMU는 커널이 없으면 대상이 없다. 설치만으로는 검증이 늘지 않는다. 정적으로 할 수 있는 검사는 이번에 끝냈다.
 - **세션 9 (2026-10-19): CI 게이트 린트와 판정 하네스.** actionlint v1.7.12와 shellcheck v0.11.0을 `~/bin`에 설치했다 (sudo 없음, actionlint는 체크섬 검증). actionlint: error 0, info 1 (`Deps`의 SC2012). shellcheck: 인라인 run 블록과 스크립트에서 오류 0. 경고는 CI 판정에 영향이 없어 고치지 않았다. 체커에 읽기 검사를 추가했다 (읽을 수 없는 로그가 빈 카운터로 우연히 FAIL 되던 것을 명시적으로). 테스트 18/18. awk 합성 검증: 탭과 공백 형식 모두 Build 단계 97줄 (옛 필터는 공백에서 0줄, job 열 없이 98줄). 실 CI 로그로는 미검증. `tools/post-ci-analyze.sh` 준비: 판정 5종 (PASS, FAIL, COMPILE_ERROR, BUILD_ABORTED_BEFORE_VERIFY, UNKNOWN), fixture 5개, 테스트 7/7. `xnu-cc.py` 제안 3건 (구문만 확인, 미적용). 워크플로우 변경 없음. **유지 규칙:** `tools/post-ci-analyze.sh`의 `baseline_skipped != 4` 검사는 `tools/check-patch-log.sh`의 `BASELINE_SKIPS` 개수다. `DXB_SHA`를 바꾸면 두 곳을 같이 바꾼다.
 - **세션 7 (2026-10-19): 로컬 검증 결과.** 전제 조건 7개 중 6개 충족 (`ci-validate/v1` = `d61ef3c`, origin push DISABLED, `xnu-8796.141.3` 태그, 패치 체인 84/84, 체크 17/17, 두 도구 존재). 미충족은 `tools/xnu-cc.py --help`뿐이다. `tools/xnu-cc.py`는 `--help`를 지원하지 않는다 (`sys.argv[2]`에서 IndexError). 사용법은 모듈 설명문에 있다. 0082–0084 로컬 컴파일: **미검증.** 입력 부재 (CI 로그와 `xnu-buildtree`), `~/swift/usr/bin/clang` 없음, xnu 빌드 디렉터리는 macOS `xcrun`에 의존한다 (`makedefs/MakeInc.cmd:108`). QEMU 스모크: **미검증.** `qemu-system-aarch64` 없음, 커널 없음 (CI `xnu-kernel`). `tools/mkadt.py --qemu`는 로컬에서 동작한다 (4164바이트, `/product` 노드 없음 경고). 결과와 조치는 `CI-PRECHECK.md`. 운영 규칙 유지: 게이트는 `sweetgpu=1`이 표준이고, `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다.
@@ -17,10 +18,76 @@
 
 | 드라이버 | 상태 | 막힌 곳 |
 |---|---|---|
-| 0082 GPU (`MsmGpuAdreno618`) | 소스 확정 완료, HW bring-up 대기 | GBIF 값, NO_UPDATE, IB 설계, SSD |
+| 0082 GPU (`MsmGpuAdreno618`) | DT 값으로 재작성 (`f6bdb2b`), 미컴파일. zap·클록·SMMU 미구현 | GBIF, 클록/GDSC, SMMU, NO_UPDATE, TSB/ADDR_MODE, IB 설계, SSD |
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 12 (2026-10-19): 0082 GPU 재작성 (실제 DTB 값, `f6bdb2b`)
+
+**결과.** `xnu/patches/0082-sweet-gpu-adreno618.patch`를 다시 생성했다 (`iokit/Kernel/arm/SweetGPU.{h,cpp}`). 0083·0084는 바이트 단위로 그대로다. 컴파일은 하지 않았다 (Apple 툴체인 없음). 정적 감사와 패치 체인 84/84만 확인했다.
+
+**확정 값** (`phone-dump/sweet.dts`, 줄 번호):
+
+| 항목 | 값 | 줄 |
+|---|---|---|
+| reg 창 0–3 | gpu `0x5000000` 0x40000, cx_dbgc `0x5061000` 0x800, cx_misc `0x509e000` 0x1000, qfprom `0x780000` 0x6300 (`reg-names`: kgsl_3d0_reg_memory, cx_dbgc, cx_misc, qfprom_memory) | 17752–17753 |
+| IRQ | `<0 0x12c 4>` = SPI 300, level-high (GIC INTID 332) | 17754 |
+| chip-id | `0x6010800` (DT 값. Mesa에 칩 ID 레지스터가 없어 읽지 않는다) | 17757 |
+| speed bin | qfprom 바이트 오프셋 `0x41a0`, mask `0x1fe00000`, shift 21 | 17783 |
+| SECVID | `qcom,gpu-quirk-secvid-set-once` (Linux에는 대응 쿼크가 없다) | 17759 |
+| 클록 | core_clk, rbbmtimer_clk, mem_clk, mem_iface_clk, gmu_clk | 17768 |
+| 레귤레이터 | vddcx = phandle `0x1c5` (gpu_cx_gdsc), vdd = `0x24e` (gpu_gx_gdsc) | 17777–17778 |
+| zap | `pil_gpu` (`qcom,kgsl-hyp`, pas-id 0x0d, firmware `a615_zap`). GPU 노드가 참조하지 않는다 | 17674–17678 |
+| 주파수 표 | bin 0x00·0xac (init 7, ca 5), 0x92 (6, 4), 0x80 (5, 3), 0xa7 (7, 4). Hz는 DT 그대로 | 17821, 17901, 17981, 18053, 18117 |
+
+주파수 표는 `dt_pwr.py`가 DT에서 뽑은 값과 C 표를 자동 대조했다. 5개 bin 모두 일치 (센티넬 포함).
+
+**브리프 정정 (세 가지):**
+- bin 0xa7의 최대 주파수는 800 MHz다 (825 MHz가 아니다).
+- bin 0x80의 최대 주파수는 610 MHz다 (609 MHz가 아니다).
+- `a615_zap.mdt` + `.b00` + `.b01` + `.b02` 합계는 15704 B다 (15702 B가 아니다).
+
+**세션 12에서 확인한 것:**
+1. **zap 전제 정정.** Linux `adreno_zap_shader_load`는 GPU 노드의 자식 `zap-shader`만 찾는다 (`adreno_gpu.c:49`). 이 DT에는 그런 자식이 없고, `pil_gpu`를 가리키는 phandle도 없다. 따라서 Linux 규칙으로는 `-ENODEV`이고, `a6xx_gpu.c:1515-1516`의 SECVID 경로를 탄다. 재작성은 같은 경로를 따른다. downstream KGSL이 `pil_gpu`를 다른 방식으로 찾는지는 refs에 없어 미확정이다.
+2. **`stop()` 버그 (0082 HEAD).** 게이트가 닫혀 있어도 `RBBM_INT_0_MASK`를 썼다. 재작성은 `teardown()`이 ready 상태일 때만 쓴다.
+3. **링 크기 불일치 (0082 HEAD).** 링은 64 KiB인데 `CP_RB_CNTL` 0x20C는 32 KiB를 뜻한다 (`msm_gpu.h:306-311`, `MSM_GPU_RINGBUFFER_SZ = SZ_32K`). 32 KiB로 고쳤고, 물리 연속 할당 (`kIOMemoryPhysicallyContiguous`)을 추가했다.
+4. **personality 없음.** `MsmGpuAdreno618`은 0082 패치에만 나온다. 매칭으로는 `start()`가 호출되지 않는다. `sweetgpu=1`은 명시적 인스턴스화가 있을 때만 효과가 있다.
+5. **bin 0xa7의 initial level 7이 센티넬 항목이다** (`sweet.dts:18182`). 그 bin은 `start()`가 거부한다.
+6. **Linux와 다르게 남긴 것.** INT 마스크: Linux hw_init은 `A6XX_INT_MASK`를 쓰지만 (`a6xx_gpu.c:1436-1437`), 재작성은 0을 쓴다. SW 리셋: Linux는 `a6xx_recover`에서만 쓰지만 (gmu-wrapper/rgmu, `a6xx_gpu.c:1606-1612`), 재작성은 powerUp에 둔다. 둘 다 미확정으로 표시했다.
+7. **Linux hw_init이 쓰고 재작성은 쓰지 않는 것:** `RBBM_SECVID_TSB_CNTL` (0xF803), `TSB_TRUSTED_BASE` (0xF800, reg64), `TSB_TRUSTED_SIZE` (0xF802)를 0으로 (`a6xx_gpu.c:1210-1221`), `*_ADDR_MODE_CNTL` 12개를 1로 (`a6xx_gpu.c:1229-1236`, a7xx가 아닌 경로). 범위 밖이라 넣지 않았다. 다음 세션 후보.
+8. **MMIO 검증은 제한적이다.** 칩 ID 레지스터가 Mesa에 없고 (`CHIP_ID` 0건), Linux도 칩 ID를 레지스터에서 읽지 않는다. 읽기 전용 신원 검사는 할 수 없다. 대신 각 창의 매핑 길이가 DT 크기 이상인지 확인한다.
+
+**미확정:**
+- zap/SCM: 로더 없음. GPU가 secure mode를 요구하는지 모른다. Linux 주석은 잘못 추측하면 `RBBM_SECVID_TRUST_CNTL` 접근이 막혀 권한 위반이 생긴다고 경고한다 (`a6xx_gpu.c:1496-1497`).
+- GBIF_SCACHE_CNTL0/1: LLCC slice id가 필요하다 (`a6xx_gpu.c:1979-2051`). 쓰지 않았다.
+- SMMU: `arm,smmu-kgsl@5040000` (`sweet.dts:10589`). GPU 주소 번역 설정이 없다.
+- 클록과 GDSC: 위 5개 클록, vddcx/vdd 레귤레이터. XNU에 제어 경로가 없다. 꺼진 도메인에 쓰면 폴트할 수 있다.
+- 주파수 적용: 표를 골라 로그만 찍는다. 클록은 프로그램하지 않는다.
+- IRQ: `registerInterrupt(0)`은 provider의 ADT 인터럽트 컨트롤러에 의존한다. `IOService::registerInterrupt`는 `lookupInterrupt` 실패 시 에러를 돌려준다. 그 경우 start가 실패한다. 실기 미검증.
+- TSB 세 개와 ADDR_MODE 12개 (위 7). CP_RB_RPTR_ADDR (CP 시작 전에는 불필요).
+- NO_UPDATE: `hw_apriv`에 따른다 (`a6xx_gpu.c:1452-1456`). 재작성은 0x20C만 쓴다.
+- SW 리셋 유지 여부 (위 6).
+- 이 폰의 speed bin 값: 읽기 전에는 모른다. 표에 없으면 start가 실패한다 (fail-closed).
+- 칩 ID 레지스터 오프셋.
+- 프레임 제출: `CP_INDIRECT_BUFFER` 설계가 필요하다. `kIOReturnUnsupported`를 유지한다.
+
+**안전 메모.**
+- `sweetgpu=1`은 이제 실제로 RBBM을 리셋하고 CP 레지스터를 쓴다. 전원이나 클록이 꺼진 GPU에서는 첫 쓰기가 버스 폴트를 일으킬 수 있다. 실기 검증 전에는 켜지 않는다.
+- zap 없이 SECVID 경로로 계속 간다. Linux에서 이 경로가 맞지 않으면 "잘못 추측했다"는 뜻이다 (`a6xx_gpu.c:1496-1497`).
+
+**빌드 기록.**
+- `f6bdb2b`: 컴파일 기록 없음. 정적 감사 (include, 선언과 정의, 접근, IOKit 시그니처를 `~/refs/xnu-sweet`와 대조), 이름 충돌 0건, 확정 오류 0건. 컴파일이 아니다.
+- 체인 84/84: 클린 `xnu-8796.141.3` 워크트리에서 스테이지 스크립트 3개 (placeholder xcrun, 네트워크 fetch)를 실행한 뒤 패치 84개를 적용했다. 실행기는 저장소 밖 (`scratchpad/run-chain.sh`).
+- `tools/test-check-patch-log.sh xnu/patches`: 18/18.
+- 첫 CI run (`run.log`, 13:06Z): `tools/post-ci-analyze.sh` → PASS (exit 0). 적용 88, 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 실행 ID는 로그에 없다 (`gh run list`로 확인 필요, 세션 12에서는 gh를 쓰지 않았다). 빌드 커밋은 미확인.
+
+**다음 세션 후보.**
+1. `f6bdb2b`를 CI에서 컴파일한다 (`CI-TRIGGER.md`; 사용자 승인 필요).
+2. TSB/ADDR_MODE 목록 확정 (Linux 대응을 확인한 뒤 추가할지 결정).
+3. SMMU, GBIF, 클록/GDSC 설계 (XNU에 제어 경로가 있는지 확인).
+4. `pil_gpu`를 downstream KGSL이 어떻게 찾는지, 그리고 SECVID 경로가 맞는지 확인.
+5. `CI-PRECHECK.md` 갱신 (첫 run 결과, 빌드 커밋 미확인). 이번 세션에서는 하지 않았다.
 
 ### P0 + session 3 (2026-10-19): GPU closed, Wi-Fi rewritten to SNOC+QMI
 
