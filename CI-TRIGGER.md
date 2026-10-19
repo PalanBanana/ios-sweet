@@ -7,6 +7,8 @@
 
 ## 0. 반드시 읽기
 
+실행이 실패하면 `CI-FAILURE-PLAYBOOK.md`를 따른다. 분류 표, 로그 회수 명령, 시나리오별 대응이 있다.
+
 - **`origin`은 업스트림 `dipa-studio/ios-sweet`다 (fetch와 push 모두).** 이 저장소에서 `git push`를 인자 없이 실행하거나 `git push origin ...`을 쓰면 업스트림으로 간다. 하지 말 것.
 - **`main`에 push하지 말 것.** `main`으로 push하면 `xnu/patches/**` 변경에 대해 `xnu.yml`이 자동 실행된다 (`.github/workflows/xnu.yml`의 `push: branches: [main]`).
 - **PR을 만들어도 빌드는 시작되지 않는다.** 워크플로우에 `pull_request` 트리거가 없다 (`on:`은 `workflow_dispatch`와 `push: main`뿐이다). 빌드는 `gh workflow run`으로만 시작한다.
