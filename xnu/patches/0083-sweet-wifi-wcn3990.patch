@@ -58,7 +58,7 @@
 +#endif /* _SWEET_WIFI_WCN3990_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.cpp
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,186 @@
 +/*
 + * SWEET: WCN3990 controller, SNOC + QMI model (see SweetWifi.h).
 + *
@@ -74,6 +74,19 @@
 +
 +#define super IOService
 +OSDefineMetaClassAndStructors(Wcn3990Controller, IOService)
++
++/*
++ * Boot-arg gate: only the exact value 1 opens it. The buffer is int64_t and
++ * max_len is 8, because argnumcpy stores (int32_t)val at max_len 4, so
++ * sweetwifi=4294967297 would read back as 1 (bootargs.c:362). A bare name, or any value that is not
++ * the number 1, keeps the gate closed.
++ */
++static bool
++sweetWifiGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetwifi", &value, (int)sizeof(value)) && value == 1;
++}
 +
 +/* snoc.c:48-54 ath10k_regulators. Voltages 미확정 (device tree). */
 +static const char * const kRegulators[] = {
@@ -112,7 +125,8 @@
 +	}
 +	printf("SWEET WIFI: SNOC membase mapped (no register access)\n");
 +
-+	if (!PE_parse_boot_argn("sweetwifi", NULL, 0)) {
++	/* VALUE checked: only sweetwifi=1 enables power and QMI */
++	if (!sweetWifiGateOpen()) {
 +		printf("SWEET WIFI: sweetwifi=1 not set; power and QMI untouched\n");
 +		registerService();
 +		return true;

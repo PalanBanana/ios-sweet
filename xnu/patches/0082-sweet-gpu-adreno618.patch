@@ -57,7 +57,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,247 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -76,6 +76,19 @@
 +
 +#define super IOService
 +OSDefineMetaClassAndStructors(MsmGpuAdreno618, IOService)
++
++/*
++ * Boot-arg gate: only the exact value 1 opens it. The buffer is int64_t and
++ * max_len is 8, because argnumcpy stores (int32_t)val at max_len 4, so
++ * sweetgpu=4294967297 would read back as 1 (bootargs.c:362). A bare name, or any value that is not
++ * the number 1, keeps the gate closed.
++ */
++static bool
++sweetGpuGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetgpu", &value, (int)sizeof(value)) && value == 1;
++}
 +
 +/*
 + * Dword indices, as in Mesa src/freedreno/registers/adreno/a6xx.xml and
@@ -157,23 +170,27 @@
 +	/* identity register not read: no chip-id offset confirmed (미확정) */
 +	printf("SWEET GPU: mmio mapped (identity not read: 미확정)\n");
 +
-+	if (!PE_parse_boot_argn("sweetgpu", NULL, 0)) {
++	/* VALUE checked: only sweetgpu=1 enables unverified MMIO writes */
++	if (!sweetGpuGateOpen()) {
 +		printf("SWEET GPU: sweetgpu=1 not set; leaving hardware untouched\n");
 +		registerService();
 +		return true;
 +	}
 +
++	/* Zap loads before any register write: no firmware, no MMIO writes. */
++	if (loadZapFirmware() != kIOReturnSuccess) {
++		printf("SWEET GPU: zap firmware unavailable; GPU not started\n");
++		OSSafeReleaseNULL(fMmio);
++		return false;
++	}
 +	if (powerUpSequence() != kIOReturnSuccess) {
 +		printf("SWEET GPU: power-up failed\n");
 +		OSSafeReleaseNULL(fMmio);
 +		return false;
 +	}
-+	if (loadZapFirmware() != kIOReturnSuccess) {
-+		printf("SWEET GPU: zap firmware missing; GPU not ready\n");
-+		return false;
-+	}
 +	if (initRingbuffer() != kIOReturnSuccess) {
 +		printf("SWEET GPU: ring buffer init failed\n");
++		OSSafeReleaseNULL(fMmio);
 +		return false;
 +	}
 +	fReady = true;
@@ -225,22 +242,12 @@
 +IOReturn MsmGpuAdreno618::loadZapFirmware(void)
 +{
 +	/*
-+	 * The zap shader (a615_zap.mbn) is in the Android vendor partition.
-+	 * The shim is expected to place it at the reserved DRAM range that the
-+	 * ADT node /arm-io/gpu-zap describes (not yet in mkadt.py). Until that
-+	 * exists this returns an error, so the GPU never runs unsigned code.
++	 * Not implemented. a615_zap.mbn is in the Android vendor partition, which
++	 * this machine cannot read. A success return here would mark the GPU ready
++	 * without firmware, so this always fails.
 +	 */
-+	fZapBuf = IOBufferMemoryDescriptor::withOptions(
-+	    kIODirectionInOut | kIOMemoryKernelUserShared, kZapBytes, page_size);
-+	if (!fZapBuf) {
-+		return kIOReturnNoMemory;
-+	}
-+	if (!PE_parse_boot_argn("sweetgpuzap", NULL, 0)) {
-+		printf("SWEET GPU: zap blob not provided (sweetgpuzap unset)\n");
-+		OSSafeReleaseNULL(fZapBuf);
-+		return kIOReturnNotFound;
-+	}
-+	return kIOReturnSuccess;
++	printf("SWEET GPU: zap loader not implemented; refusing to start\n");
++	return kIOReturnUnsupported;
 +}
 +
 +IOReturn MsmGpuAdreno618::initRingbuffer(void)

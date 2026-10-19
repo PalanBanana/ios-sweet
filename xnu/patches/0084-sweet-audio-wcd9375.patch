@@ -52,7 +52,7 @@
 +#endif /* _SWEET_WCD9375_AUDIO_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWcd9375Audio.cpp
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,167 @@
 +/*
 + * SWEET: WCD9375 bring-up (see SweetWcd9375Audio.h).
 + *
@@ -69,6 +69,19 @@
 +
 +#define super IOService
 +OSDefineMetaClassAndStructors(SweetWcd9375Audio, IOService)
++
++/*
++ * Boot-arg gate: only the exact value 1 opens it. The buffer is int64_t and
++ * max_len is 8, because argnumcpy stores (int32_t)val at max_len 4, so
++ * sweetaudio=4294967297 would read back as 1 (bootargs.c:362). A bare name, or any value that is not
++ * the number 1, keeps the gate closed.
++ */
++static bool
++sweetAudioGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetaudio", &value, (int)sizeof(value)) && value == 1;
++}
 +
 +/* VERIFY: all offsets against wcd937x.c / slimbus registers */
 +enum {
@@ -116,7 +129,8 @@
 +	fRegs = (volatile uint32_t *)fSlimbus->getVirtualAddress();
 +	printf("SWEET AUDIO: SLIMBUS block mapped (no register read: offsets unverified)\n");
 +
-+	if (!PE_parse_boot_argn("sweetaudio", NULL, 0)) {
++	/* VALUE checked: only sweetaudio=1 enables codec access */
++	if (!sweetAudioGateOpen()) {
 +		printf("SWEET AUDIO: sweetaudio=1 not set; codec untouched\n");
 +		registerService();
 +		return true;
