@@ -8,6 +8,7 @@
 - **검증 상태:** 패치 체인 0001–0084는 `git apply --check`만 통과 (정적). 0080까지 CI 빌드 기록, 0081 기록 없음, 0082–0084 미컴파일.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **GPU는 설계상 비활성 (세션 6, 2026-10-19):** `sweetgpu=1`로 게이트를 열어도 `loadZapFirmware`가 항상 실패하므로 레지스터 쓰기가 일어나지 않는다. zap 블롭 로더가 생길 때까지 GPU는 inert다. `sweetgpu=1`로 부팅했는데 GPU가 동작하지 않는 것은 정상이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다. 운영 규칙은 `sweetgpu=1`만 쓰는 것이다.
 
 드라이버별 상태:
 

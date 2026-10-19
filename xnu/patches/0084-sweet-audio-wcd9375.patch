@@ -7,7 +7,7 @@
 + * VERIFY result: the codec is SoundWire (wcd937x-sdw.c), not SLIMBUS as
 + * this skeleton assumed. sweetaudio=1 is refused in start().
 + *
-+ * Status: skeleton. start() maps the SLIMBUS block and reads the codec
++ * Status: skeleton. start() maps the codec block and reads the codec
 + * slave id. Codec reset, slave attach and ADM routing run only with
 + * boot-arg sweetaudio=1. IOAudioFamily is not in the xnu tree, so the
 + * class derives from IOService. Route, volume and stream methods are the
@@ -23,7 +23,7 @@
 +	OSDeclareDefaultStructors(SweetWcd9375Audio);
 +
 +private:
-+	IOMemoryMap     *fSlimbus;   /* codec control block (bus model unconfirmed) */
++	IOMemoryMap     *fCodecMem;   /* codec control block (bus model unconfirmed) */
 +	volatile uint32_t *fRegs;
 +	uint32_t        fRoute;
 +	uint32_t        fVolume;
@@ -52,7 +52,8 @@
 +#endif /* _SWEET_WCD9375_AUDIO_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWcd9375Audio.cpp
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,174 @@
++/* STATUS: REFUTED scaffold. SoundWire rewrite required. Do not enable sweetaudio=1. */
 +/*
 + * SWEET: WCD9375 bring-up (see SweetWcd9375Audio.h).
 + *
@@ -86,11 +87,11 @@
 +	return PE_parse_boot_argn("sweetaudio", &value, (int)sizeof(value)) && value == 1;
 +}
 +
-+/* VERIFY: all offsets against wcd937x.c / slimbus registers */
++/* VERIFY: all offsets against wcd937x.c and wcd937x.h (not checked) */
 +enum {
 +	kCodecChipId   = 0x0000,  /* VERIFY */
 +	kCodecReset    = 0x0010,  /* VERIFY */
-+	kSlimSlaveId   = 0x0100,  /* VERIFY */
++	kCodecSlaveId   = 0x0100,  /* VERIFY */
 +	kAdmChanCtl    = 0x0200,  /* VERIFY */
 +	kCodecVolume   = 0x0300,  /* VERIFY: step register */
 +};
@@ -110,7 +111,7 @@
 +	if (!super::init(dict)) {
 +		return false;
 +	}
-+	fSlimbus = NULL;
++	fCodecMem = NULL;
 +	fRegs = NULL;
 +	fRoute = 0;
 +	fVolume = 50;
@@ -124,22 +125,23 @@
 +	if (!super::start(provider)) {
 +		return false;
 +	}
-+	fSlimbus = provider->mapDeviceMemoryWithIndex(0);
-+	if (!fSlimbus) {
-+		printf("SWEET AUDIO: SLIMBUS map failed\n");
++	fCodecMem = provider->mapDeviceMemoryWithIndex(0);
++	if (!fCodecMem) {
++		printf("SWEET AUDIO: codec block map failed\n");
 +		return false;
 +	}
-+	fRegs = (volatile uint32_t *)fSlimbus->getVirtualAddress();
-+	printf("SWEET AUDIO: SLIMBUS block mapped (no register read: offsets unverified)\n");
++	fRegs = (volatile uint32_t *)fCodecMem->getVirtualAddress();
++	printf("SWEET AUDIO: codec block mapped (no register read: offsets unverified)\n");
 +
 +	/* VALUE checked: only sweetaudio=1 enables codec access */
++	/* use sweetaudio=1 for clarity; -sweetaudio and sweetaudio=0x1 also open */
 +	if (!sweetAudioGateOpen()) {
 +		printf("SWEET AUDIO: sweetaudio=1 not set; codec untouched\n");
 +		registerService();
 +		return true;
 +	}
 +	/* Refused: SoundWire model (see header). Codec reset/attach not run. */
-+	printf("SWEET AUDIO: sweetaudio=1 refused: WCD9375 is SoundWire, not SLIMBUS\n");
++	printf("SWEET AUDIO: sweetaudio=1 refused: WCD9375 is SoundWire; rewrite required\n");
 +	return false;
 +}
 +
@@ -153,9 +155,9 @@
 +
 +IOReturn SweetWcd9375Audio::slaveAttach(void)
 +{
-+	/* VERIFY: poll SLIMBUS slave enumeration until the codec reports in. */
++	/* VERIFY (refuted bus model): poll enumeration of the real bus, SoundWire. */
 +	for (int i = 0; i < 1000; i++) {
-+		if (readReg(kSlimSlaveId)) {
++		if (readReg(kCodecSlaveId)) {
 +			return kIOReturnSuccess;
 +		}
 +		IODelay(100);
@@ -220,7 +222,7 @@
 +
 +void SweetWcd9375Audio::free(void)
 +{
-+	OSSafeReleaseNULL(fSlimbus);
++	OSSafeReleaseNULL(fCodecMem);
 +	super::free();
 +}
 +

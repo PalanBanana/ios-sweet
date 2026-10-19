@@ -1,14 +1,16 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,55 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
 + * Status: skeleton. start() maps the GPU MMIO block and performs no
-+ * register access. Power-up, ring buffer and zap loading run only with
-+ * boot-arg sweetgpu=1. Register offsets and the CP_RB_CNTL default are
-+ * checked against Mesa a6xx.xml and msm_gpu.h. Items still open for hardware
-+ * bring-up (GBIF LLCC slice, NO_UPDATE choice, frame submission) are marked
++ * register access. The boot-arg gate sweetgpu=1 opens the power-up path, but
++ * loadZapFirmware always fails, so no register write happens and the GPU
++ * stays inert until a zap blob loader exists. Register offsets and the
++ * CP_RB_CNTL default are checked against Mesa a6xx.xml and msm_gpu.h. Items
++ * still open for hardware bring-up (GBIF LLCC slice, NO_UPDATE choice, frame
++ * submission) are marked
 + * 미확정 in SweetGPU.cpp. A frame submission path needs a command-stream
 + * design (see submitFrame).
 + */
@@ -26,7 +28,6 @@
 +	IOMemoryMap                 *fMmio;        /* GPU register block */
 +	volatile uint32_t           *fRegs;
 +	IOBufferMemoryDescriptor    *fRingBuf;     /* 64 KiB command ring */
-+	IOBufferMemoryDescriptor    *fZapBuf;      /* 64 KiB zap firmware */
 +	uint32_t                    fRingWptr;
 +	uint32_t                    fFence;
 +	bool                        fReady;
@@ -57,7 +58,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,252 @@
+@@ -0,0 +1,250 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -120,7 +121,6 @@
 +static const uint32_t kRbbmStatusCxAhbBusy = 1u << 0;
 +
 +static const uint32_t kRingBytes = 64 * 1024;
-+static const uint32_t kZapBytes  = 64 * 1024;
 +
 +uint32_t MsmGpuAdreno618::readReg(uint32_t idx)
 +{
@@ -140,7 +140,6 @@
 +	fMmio = NULL;
 +	fRegs = NULL;
 +	fRingBuf = NULL;
-+	fZapBuf = NULL;
 +	fRingWptr = 0;
 +	fFence = 0;
 +	fReady = false;
@@ -174,6 +173,7 @@
 +	printf("SWEET GPU: mmio mapped (identity not read: 미확정)\n");
 +
 +	/* VALUE checked: only sweetgpu=1 enables unverified MMIO writes */
++	/* use sweetgpu=1 for clarity; -sweetgpu and sweetgpu=0x1 also open */
 +	if (!sweetGpuGateOpen()) {
 +		printf("SWEET GPU: sweetgpu=1 not set; leaving hardware untouched\n");
 +		registerService();
@@ -304,7 +304,6 @@
 +void MsmGpuAdreno618::free(void)
 +{
 +	OSSafeReleaseNULL(fRingBuf);
-+	OSSafeReleaseNULL(fZapBuf);
 +	OSSafeReleaseNULL(fMmio);
 +	super::free();
 +}

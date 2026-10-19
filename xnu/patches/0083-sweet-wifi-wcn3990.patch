@@ -58,7 +58,7 @@
 +#endif /* _SWEET_WIFI_WCN3990_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.cpp
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,192 @@
 +/*
 + * SWEET: WCN3990 controller, SNOC + QMI model (see SweetWifi.h).
 + *
@@ -129,6 +129,7 @@
 +	printf("SWEET WIFI: SNOC membase mapped (no register access)\n");
 +
 +	/* VALUE checked: only sweetwifi=1 enables power and QMI */
++	/* use sweetwifi=1 for clarity; -sweetwifi and sweetwifi=0x1 also open */
 +	if (!sweetWifiGateOpen()) {
 +		printf("SWEET WIFI: sweetwifi=1 not set; power and QMI untouched\n");
 +		registerService();
