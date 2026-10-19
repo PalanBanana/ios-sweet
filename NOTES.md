@@ -1,49 +1,43 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-### P0 VERIFY 2026-10-19 (drivers 0082-0084)
+### P0 + session 3 (2026-10-19): GPU closed, Wi-Fi rewritten to SNOC+QMI
 
-Sources: xnu-8796.141.3 (`apple-oss-distributions/xnu`), Mesa `src/freedreno/registers/adreno/*.xml`, torvalds/linux (`drivers/gpu/drm/msm/adreno`, `drivers/net/wireless/ath/ath10k`, `sound/soc/codecs/wcd937x*`). Local only under `~/refs/`.
+Sources: xnu-8796.141.3 (`apple-oss-distributions/xnu`), Mesa `src/freedreno/registers/adreno/*.xml`, torvalds/linux (`drivers/gpu/drm/msm/`, `drivers/net/wireless/ath/ath10k/`, `sound/soc/codecs/wcd937x*`). Local only under `~/refs/`.
 
-- **files.arm64 anchor: confirmed.** `iokit/conf/files.arm64` line 22 = `iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp`. The 0082/0083/0084 hunks are at 22/23/24. All 84 patches apply in order on a clean xnu-8796.141.3 tree, with the stage scripts 0019/0020/0026 run first (their SDK `TargetConditionals.h` came from a placeholder, so only path/context checks were done, not compiles).
-- **Mesa XML offsets are dword indices.** `adreno_gpu.h:766` computes `mmio + (addr << 2)`. The old byte offsets were wrong, and several guesses (`RBBM_SW_RESET` 0x18, `GBIF_SCACHE` 0x3b00, `CP_INT_CNTL` 0x0a00) are not in the XML at all.
+- **files.arm64 anchor: confirmed.** `iokit/conf/files.arm64` line 22 = `iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp`. Hunks for 0082/0083/0084 are at 22/23/24. All 84 patches apply in order on a clean xnu-8796.141.3 tree, with stage scripts 0019/0020/0026 run first (their SDK `TargetConditionals.h` was a placeholder, so this checks paths and context only; nothing was compiled).
+- **Mesa XML offsets are dword indices.** `adreno_gpu.h:766` computes `mmio + (addr << 2)`.
 
-**0082 GPU (MsmGpuAdreno618)**
+**0082 GPU (MsmGpuAdreno618): closed for source-level items**
 
 | Item | Status | Source |
 |---|---|---|
-| Dword-index convention | confirmed | adreno_gpu.h:766 |
-| RBBM_STATUS 0x210, RBBM_SW_RESET_CMD 0x43, RBBM_INT_0_MASK 0x38, RBBM_INT_0_STATUS 0x201 | confirmed | a6xx.xml:554/806/801/552 |
-| GBIF_SCACHE_CNTL0/1 0x3c01/0x3c02 | confirmed offset, value unconfirmed (kernel uses rmw) | a6xx.xml:1273-1274, a6xx_gpu.c:1989-2050 |
+| Dword-index convention; RBBM_STATUS 0x210, RBBM_SW_RESET_CMD 0x43, RBBM_INT_0_MASK 0x38, RBBM_INT_0_STATUS 0x201 | confirmed | adreno_gpu.h:766; a6xx.xml:554/806/801/552 |
 | CP_RB_BASE 0x800 (reg64), CP_RB_RPTR_ADDR 0x804 (reg64), CP_RB_CNTL 0x802, CP_RB_RPTR 0x806, CP_RB_WPTR 0x807 | confirmed | a6xx.xml:147-152 |
 | CP_INT_CNTL 0x1f2, CP_ME_CNTL 0x1f6, CP_ME_STATUS 0x1f7 | confirmed | adreno_common.xml:184/197/201 |
-| Idle = RBBM_STATUS & ~CP_AHB_BUSY_CX_MASTER (bit 0) == 0 | confirmed | a6xx_gpu.c:128, a6xx.xml bit 0 |
-| Reset: assert, deassert RBBM_SW_RESET_CMD | confirmed | a6xx_gpu.c:2128-2131 |
-| Interrupt mask 0 at init; **stop() wrote ~0 (enables all): fixed to 0** | confirmed | a6xx_gpu.c:1849 |
-| zap `a615_zap.mbn` for chip ID 0x06010800 | confirmed (chip ID to name mapping not checked) | a6xx_catalog.c:763-774 |
-| CP_RB_BASE lo at index, hi at index+1 | unconfirmed (gpu_write64 is in msm_gpu.h, not fetched) | a6xx_gpu.c:1446 |
-| CP_RB_CNTL value (MSM_GPU_RB_CNTL_DEFAULT) | unconfirmed, not written | a6xx_gpu.c:1453 |
-| Chip-ID register (kGpuIdentity 0x0) | unconfirmed, not read | none found in a6xx.xml |
-| submitFrame via CP_MEM_TO_MEM | **refuted**: copies dwords, cannot move a surface; now returns kIOReturnUnsupported | adreno_pm4.xml:1368 |
+| 64-bit write: lo at reg, hi at reg+1 | confirmed | msm_gpu.h:692-698 |
+| CP_RB_CNTL default = 0x20C (BUFSZ 12, BLKSZ 2) | confirmed | msm_gpu.h:306-311; adreno_common.xml:138-141 |
+| Idle = RBBM_STATUS & ~CP_AHB_BUSY_CX_MASTER (bit 0) == 0 | confirmed | a6xx_gpu.c:128; a6xx.xml bit 0 |
+| Reset: assert, then deassert RBBM_SW_RESET_CMD | confirmed | a6xx_gpu.c:2128-2131 |
+| RBBM_INT_0_MASK = 0 at init and in stop() (~0 enabled everything, now fixed) | confirmed | a6xx_gpu.c:1849 |
+| Zap `a615_zap.mbn` for chip ID 0x06010800 | confirmed (chip ID to marketing name not checked) | a6xx_catalog.c:763-774 |
+| Chip-ID register | **closed: no register exists.** The kernel takes chip_id from the catalog constant | a6xx_catalog.c:763; adreno_gpu.c:1207 |
+| submitFrame via CP_MEM_TO_MEM | **refuted**: copies dwords, cannot move a surface. Returns kIOReturnUnsupported | adreno_pm4.xml:1368 |
+| NO_UPDATE bit in CP_RB_CNTL | **open, hardware bring-up**: set only when !hw_apriv | a6xx_gpu.c:1453-1455 |
+| GBIF_SCACHE_CNTL0/1 values | **open, hardware bring-up**: computed at runtime from the LLCC slice id, which this board has not provided | a6xx_gpu.c:1980-2050 |
+| Frame submission (IB + fence design) | **open, design**: needs CP_INDIRECT_BUFFER, not CP_MEM_TO_MEM | adreno_pm4.xml |
 
-**0083 Wi-Fi (Wcn3990Controller)**
+**0083 Wi-Fi (Wcn3990Controller): rewritten to the SNOC+QMI model**
 
-| Item | Status | Source |
-|---|---|---|
-| GENI SE firmware streaming | **refuted**: ath10k uses SNOC + QMI for WCN3990 firmware. sweetwifi=1 now refuses. | snoc.c:1018, qmi.c |
-| Rail names | confirmed: vdd-0.8-cx-mx, vdd-1.8-xo, vdd-1.3-rfa, vdd-3.3-ch0, vdd-3.3-ch1 (the old names were wrong) | snoc.c:49-53 |
-| "vddio first" order | **refuted**: the first rail (cx-mx) powers part of the SoC, the rest go through pwrseq | snoc.c:1814-1818 |
-| Rail voltages | unconfirmed (not in the fetched files; set to 0 placeholder) | none |
-| GENI offsets | not applicable to WLAN; reads removed from default boot path | qcom-geni-se.c:204/232 (GENI exists for UART/I2C/SPI) |
+- Power (ath10k `ath10k_hw_power_on`, snoc.c:1022-1048): pwrseq "wlan" first (external), then regulators, then clocks. Only with pwrseq absent are all five regulators driver-owned (snoc.c:1804-1820). The "vddio first" order is refuted.
+- Rails (confirmed names, snoc.c:48-54): vdd-0.8-cx-mx, vdd-1.8-xo, vdd-1.3-rfa, vdd-3.3-ch0, vdd-3.3-ch1. Clocks (snoc.c:56-58): cxo_ref_clk_pin, qdss. Voltages: **미확정**, from the device tree.
+- Control (QMI, qmi.c): server arrive (808) = IND_REGISTER, HOST_CAP, MSA_INFO, MSA permissions, MSA_READY, CAP. MSA ready (918) = board file, BDF_DOWNLOAD, CAL_REPORT. WLAN enable (515) = WLAN_CFG, then WLAN_MODE (MISSION or FTM, snoc.c:1007-1011).
+- Transport: SNOC membase (snoc.c:1322, looked up by name "membase"). IOKit index 0 is **미확정**.
+- GENI FIFO model: removed. Refuted, since ath10k uses SNOC + QMI.
+- **Blocker:** QMI runs over QRTR (`qmi_handle_init`, qmi.c:1098). XNU has no QRTR and no remote-processor transport. `sweetwifi=1` therefore refuses before any rail is enabled.
 
-**0084 Audio (SweetWcd9375Audio)**
+**0084 Audio (SweetWcd9375Audio): not touched this session.** Confirmed: wcd937x is SoundWire, not SLIMBUS (`wcd937x-sdw.c`; wcd937x.c has zero SLIMBUS references). Codec registers are 16-bit SoundWire addresses (wcd937x.h:297-305: CHIP_ID0 0x3401, CDC_RST_CTL 0x3406, DIG_CLK_CTL 0x3409, SWR_RST_EN 0x340A), not SoC MMIO. A SoundWire redesign is a separate session. `sweetaudio=1` refuses.
 
-| Item | Status | Source |
-|---|---|---|
-| SLIMBUS | **refuted**: wcd937x is SoundWire | wcd937x-sdw.c exists; wcd937x.c has zero SLIMBUS references |
-| Offsets 0x0000/0x0010/0x0100/0x0200/0x0300 | **refuted**: not in wcd937x.h. Real codec registers are 16-bit (WCD937X_DIGITAL_CHIP_ID0 0x3401, CDC_RST_CTL 0x3406, DIG_CLK_CTL 0x3409, SWR_RST_EN 0x340A) and reached over SoundWire, not SoC MMIO | wcd937x.h:297-305 |
-| sweetaudio=1 | now refuses; default boot path reads no registers | |
-
-**Still open (blockers):** GPU chip ID, CP_RB_CNTL value, reg64 layout, and the IB submission design. Wi-Fi needs an SNOC/QMI model (and rail voltages). Audio needs a SoundWire slave model. Hardware bring-up needs the SSD (firmware blobs), and confirmation on the device.
+**Still open:** GPU NO_UPDATE choice and GBIF values (bring-up), frame-submission design. Wi-Fi: QRTR transport, membase index, rail voltages. Audio: SoundWire model. Hardware bring-up needs the SSD (firmware blobs, DT values) and the device.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
