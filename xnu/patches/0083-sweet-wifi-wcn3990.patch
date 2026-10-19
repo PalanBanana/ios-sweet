@@ -1,14 +1,20 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,55 @@
 +/*
-+ * SWEET: WCN3990 Wi-Fi/BT bring-up over GENI SE firmware streaming.
++ * SWEET: WCN3990 Wi-Fi controller, SNOC + QMI model (ath10k snoc.c / qmi.c).
 + *
-+ * Status: skeleton. start() maps the GENI SE block and logs its state.
-+ * Rail votes and firmware streaming run only with boot-arg sweetwifi=1.
-+ * IO80211Family is a separate kext and is not in the xnu tree, so this
-+ * class derives from IOService and exposes a narrow interface for the
-+ * 802.11 bridge to be added later.
++ * Layers (mirrors ath10k):
++ *   Power     pwrseq (external) or regulators, then clocks   snoc.c:1022-1048,
++ *                                                            snoc.c:1804-1820
++ *   Control   QMI wlfw requests over QRTR                    qmi.c:515, 808, 918
++ *   Transport SNOC: membase MMIO and copy engines            snoc.c:1322-1333
++ *
++ * Status: skeleton, dormant. start() maps the SNOC block and performs no
++ * register access. sweetwifi=1 checks the QMI transport first, and the
++ * kernel has none (QRTR is not in XNU), so no rail is enabled and the
++ * driver refuses to start. The IO80211 bridge is kept as plain methods:
++ * IO80211Family is a separate kext and is not in the xnu tree.
 + */
 +#ifndef _SWEET_WIFI_WCN3990_H_
 +#define _SWEET_WIFI_WCN3990_H_
@@ -20,18 +26,22 @@
 +	OSDeclareDefaultStructors(Wcn3990Controller);
 +
 +private:
-+	IOMemoryMap                 *fGeni;      /* GENI SE register block */
-+	volatile uint32_t           *fRegs;
-+	IOBufferMemoryDescriptor    *fFwBuf;     /* firmware staging buffer */
-+	bool                        fReady;
++	IOMemoryMap     *fSnocMem;   /* SNOC membase (snoc.c:1322, "membase") */
++	bool            fPwrseqPresent;
++	bool            fReady;
 +
-+	uint32_t readReg(uint32_t off);
-+	void     writeReg(uint32_t off, uint32_t val);
++	/* Transport (SNOC) */
++	IOReturn snocMap(IOService *provider);
 +
-+	IOReturn voteRpmhRegulator(const char *name, uint32_t uv, bool on);
-+	IOReturn geniSeInit(void);
-+	IOReturn geniFifoWrite(uint32_t word);
-+	IOReturn streamFirmware(void);
++	/* Power: pwrseq, then regulators, then clocks (snoc.c:1022-1048) */
++	IOReturn powerOn(void);
++	IOReturn powerOff(void);
++
++	/* Control: QMI wlfw handshake (qmi.c) */
++	bool     qmiTransportAvailable(void);
++	IOReturn qmiServerArrive(void);   /* qmi.c:808 */
++	IOReturn qmiMsaReady(void);       /* qmi.c:918 */
++	IOReturn qmiWlanEnable(bool ftm); /* qmi.c:515 */
 +
 +public:
 +	virtual bool init(OSDictionary *dict = NULL) override;
@@ -39,28 +49,22 @@
 +	virtual void stop(IOService *provider) override;
 +	virtual void free(void) override;
 +
++	/* IO80211 bridge, as plain methods */
 +	IOReturn enable(void);
 +	IOReturn disable(void);
++	IOReturn getHardwareAddress(uint8_t mac[6]);
 +};
 +
 +#endif /* _SWEET_WIFI_WCN3990_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.cpp
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,172 @@
 +/*
-+ * SWEET: WCN3990 bring-up (see SweetWifi.h).
++ * SWEET: WCN3990 controller, SNOC + QMI model (see SweetWifi.h).
 + *
-+ * VERIFY result (ath10k source, xnu-independent): this class's bus model is
-+ * WRONG. ath10k drives WCN3990 over SNOC (drivers/net/wireless/ath/ath10k/
-+ * snoc.c) and loads firmware through QMI (ath10k_qmi_wlan_enable,
-+ * snoc.c:1018, qmi.c). It does not stream firmware over a GENI SE FIFO. The
-+ * GENI path below is kept only as a reference and is unreachable: sweetwifi=1
-+ * logs the mismatch and returns false.
-+ *
-+ * Rail names from snoc.c (regulator list at top of file): vdd-0.8-cx-mx,
-+ * vdd-1.8-xo, vdd-1.3-rfa, vdd-3.3-ch0, vdd-3.3-ch1. snoc.c:1814-1818
-+ * says the first rail powers part of the SoC and the rest are handled by
-+ * pwrseq, so the "vddio first" order in the brief is NOT supported.
++ * Sources for each step are cited inline. Voltages are not in the fetched
++ * files and stay 미확정 (device tree). The earlier GENI FIFO model was
++ * refuted (NOTES.md, P0) and is not carried here.
 + */
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOService.h>
@@ -71,45 +75,28 @@
 +#define super IOService
 +OSDefineMetaClassAndStructors(Wcn3990Controller, IOService)
 +
-+/* VERIFY: GENI SE register offsets against the SE programming guide */
-+enum {
-+	kGeniFwCfg     = 0x0000,  /* VERIFY: GENI_FW_REVISION */
-+	kGeniCfg       = 0x0240,  /* VERIFY: GENI_CFG_REG */
-+	kGeniStatus    = 0x0240,  /* VERIFY */
-+	kGeniTxFifo    = 0x0110,  /* VERIFY: TX FIFO data port */
-+	kGeniFifoStat  = 0x0800,  /* VERIFY: TX FIFO status */
++/* snoc.c:48-54 ath10k_regulators. Voltages 미확정 (device tree). */
++static const char * const kRegulators[] = {
++	"vdd-0.8-cx-mx",  /* first rail: powers part of the SoC (snoc.c:1814-1818) */
++	"vdd-1.8-xo",
++	"vdd-1.3-rfa",
++	"vdd-3.3-ch0",
++	"vdd-3.3-ch1",
 +};
 +
-+/* snoc.c regulator names (voltages 미확정: not in the fetched files). */
-+static const struct {
-+	const char *name;
-+	uint32_t    uv;
-+} kRailOrder[] = {
-+	{ "vdd-0.8-cx-mx", 0 },  /* snoc.c: first rail, powers part of the SoC */
-+	{ "vdd-1.8-xo",    0 },
-+	{ "vdd-1.3-rfa",   0 },
-+	{ "vdd-3.3-ch0",   0 },
-+	{ "vdd-3.3-ch1",   0 },
++/* snoc.c:56-58 ath10k_clocks */
++static const char * const kClocks[] = {
++	"cxo_ref_clk_pin",
++	"qdss",
 +};
-+
-+uint32_t Wcn3990Controller::readReg(uint32_t off)
-+{
-+	return fRegs[off / 4];
-+}
-+
-+void Wcn3990Controller::writeReg(uint32_t off, uint32_t val)
-+{
-+	fRegs[off / 4] = val;
-+}
 +
 +bool Wcn3990Controller::init(OSDictionary *dict)
 +{
 +	if (!super::init(dict)) {
 +		return false;
 +	}
-+	fGeni = NULL;
-+	fRegs = NULL;
-+	fFwBuf = NULL;
++	fSnocMem = NULL;
++	fPwrseqPresent = false;
 +	fReady = false;
 +	return true;
 +}
@@ -119,77 +106,100 @@
 +	if (!super::start(provider)) {
 +		return false;
 +	}
-+	fGeni = provider->mapDeviceMemoryWithIndex(0);
-+	if (!fGeni) {
-+		printf("SWEET WIFI: GENI SE map failed\n");
++	if (snocMap(provider) != kIOReturnSuccess) {
++		printf("SWEET WIFI: SNOC membase map failed\n");
 +		return false;
 +	}
-+	fRegs = (volatile uint32_t *)fGeni->getVirtualAddress();
-+	printf("SWEET WIFI: GENI SE mapped (no register read: offsets unverified)\n");
++	printf("SWEET WIFI: SNOC membase mapped (no register access)\n");
 +
 +	if (!PE_parse_boot_argn("sweetwifi", NULL, 0)) {
-+		printf("SWEET WIFI: sweetwifi=1 not set; rails and firmware untouched\n");
++		printf("SWEET WIFI: sweetwifi=1 not set; power and QMI untouched\n");
 +		registerService();
 +		return true;
 +	}
 +
 +	/*
-+	 * Unsupported bus model (see the file header). The rail loop and GENI
-+	 * path are not run: they would power rails and stream to the wrong
-+	 * device. Replace with an SNOC + QMI design before enabling.
++	 * Gate. Power comes first in ath10k (snoc.c:1101-1107) but the QMI
++	 * transport must exist before anything is powered. QRTR is not in XNU,
++	 * so with it missing no rail is enabled.
 +	 */
-+	printf("SWEET WIFI: sweetwifi=1 refused: WCN3990 is SNOC+QMI (ath10k), not GENI FIFO\n");
-+	return false;
++	if (!qmiTransportAvailable()) {
++		printf("SWEET WIFI: sweetwifi=1 refused: no QMI/QRTR transport in this kernel; no rail enabled\n");
++		return false;
++	}
++	if (powerOn() != kIOReturnSuccess ||
++	    qmiServerArrive() != kIOReturnSuccess ||
++	    qmiMsaReady() != kIOReturnSuccess ||
++	    qmiWlanEnable(false) != kIOReturnSuccess) {
++		printf("SWEET WIFI: bring-up failed\n");
++		powerOff();
++		return false;
++	}
++	fReady = true;
++	printf("SWEET WIFI: ready\n");
++	registerService();
++	return true;
 +}
 +
-+IOReturn Wcn3990Controller::voteRpmhRegulator(const char *name, uint32_t uv, bool on)
++IOReturn Wcn3990Controller::snocMap(IOService *provider)
++{
++	/* snoc.c:1322 looks up "membase" by name. IOKit has only the index, which
++	 * is 미확정 until the device tree node is mapped. */
++	fSnocMem = provider->mapDeviceMemoryWithIndex(0);
++	return fSnocMem ? kIOReturnSuccess : kIOReturnNoResources;
++}
++
++IOReturn Wcn3990Controller::powerOn(void)
 +{
 +	/*
-+	 * No RPMh bridge for IOKit yet. The C path in bsd/dev/sweet_rpmh.c
-+	 * (sweet_rpmh_vreg_enable) already does the vote for L11C, so this
-+	 * logs the request and returns an error until that bridge is exported.
++	 * snoc.c:1022-1048 ath10k_hw_power_on order:
++	 *   1. pwrseq_enable("wlan")           external sequence owns the PMU rails
++	 *   2. regulator_bulk_enable           snoc.c:1033
++	 *   3. clk_bulk_prepare_enable         snoc.c:1037
++	 * Regulator count (snoc.c:1804-1820): with pwrseq present only the first
++	 * rail is ours; without pwrseq all five are enabled.
 +	 */
-+	printf("SWEET WIFI: vote %s %u uV on=%d (RPMh bridge not exported)\n",
-+	    name, uv, on);
++	if (!fPwrseqPresent) {
++		printf("SWEET WIFI: pwrseq absent: all %zu rails are driver-owned\n",
++		    sizeof(kRegulators) / sizeof(kRegulators[0]));
++	}
++	(void)kClocks;
++	(void)kRegulators;
 +	return kIOReturnUnsupported;
 +}
 +
-+IOReturn Wcn3990Controller::geniSeInit(void)
++IOReturn Wcn3990Controller::powerOff(void)
 +{
-+	/* VERIFY: set M_CMD + S_CMD + EN in GENI_CFG, then poll GENI_STATUS. */
-+	writeReg(kGeniCfg, 0x7);
-+	IODelay(50);
-+	uint32_t st = readReg(kGeniStatus);
-+	printf("SWEET WIFI: GENI status %#x\n", st);
++	/* Reverse of powerOn (snoc.c:1051-1066). Unreachable until powerOn runs. */
 +	return kIOReturnSuccess;
 +}
 +
-+IOReturn Wcn3990Controller::geniFifoWrite(uint32_t word)
++bool Wcn3990Controller::qmiTransportAvailable(void)
 +{
-+	for (int i = 0; i < 10000; i++) {
-+		if (readReg(kGeniFifoStat) & 0x1) {  /* VERIFY: TX FIFO has room */
-+			writeReg(kGeniTxFifo, word);
-+			return kIOReturnSuccess;
-+		}
-+		IODelay(10);
-+	}
-+	return kIOReturnTimeout;
++	/* qmi.c:1098 qmi_handle_init() runs on the QRTR socket. QRTR does not
++	 * exist in XNU, so this is always false until a transport is provided. */
++	return false;
 +}
 +
-+IOReturn Wcn3990Controller::streamFirmware(void)
++IOReturn Wcn3990Controller::qmiServerArrive(void)
 +{
-+	/* The WLAN image sits in the vendor partition (not readable here). */
-+	fFwBuf = IOBufferMemoryDescriptor::withOptions(
-+	    kIODirectionOut | kIOMemoryKernelUserShared, 256 * 1024, page_size);
-+	if (!fFwBuf) {
-+		return kIOReturnNoMemory;
-+	}
-+	if (!PE_parse_boot_argn("sweetwififw", NULL, 0)) {
-+		printf("SWEET WIFI: firmware blob not provided (sweetwififw unset)\n");
-+		OSSafeReleaseNULL(fFwBuf);
-+		return kIOReturnNotFound;
-+	}
-+	return kIOReturnSuccess;
++	/* qmi.c:808 order: IND_REGISTER, HOST_CAP (optional), MSA_INFO,
++	 * setup MSA permissions, MSA_READY, CAP. */
++	return kIOReturnUnsupported;
++}
++
++IOReturn Wcn3990Controller::qmiMsaReady(void)
++{
++	/* qmi.c:918 order: fetch board file, BDF_DOWNLOAD, CAL_REPORT. */
++	return kIOReturnUnsupported;
++}
++
++IOReturn Wcn3990Controller::qmiWlanEnable(bool ftm)
++{
++	/* qmi.c:515 order: WLAN_CFG_REQ, then WLAN_MODE_REQ (QMI_WLFW_MISSION_V01
++	 * or QMI_WLFW_FTM_V01, snoc.c:1007-1011). */
++	(void)ftm;
++	return kIOReturnUnsupported;
 +}
 +
 +IOReturn Wcn3990Controller::enable(void)
@@ -203,6 +213,13 @@
 +	return kIOReturnSuccess;
 +}
 +
++IOReturn Wcn3990Controller::getHardwareAddress(uint8_t mac[6])
++{
++	/* 미확정: the MAC comes from firmware over QMI, which is not reachable. */
++	(void)mac;
++	return kIOReturnNotReady;
++}
++
 +void Wcn3990Controller::stop(IOService *provider)
 +{
 +	disable();
@@ -211,8 +228,7 @@
 +
 +void Wcn3990Controller::free(void)
 +{
-+	OSSafeReleaseNULL(fFwBuf);
-+	OSSafeReleaseNULL(fGeni);
++	OSSafeReleaseNULL(fSnocMem);
 +	super::free();
 +}
 --- a/iokit/conf/files.arm64
