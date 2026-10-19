@@ -1,0 +1,212 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWcd9375Audio.h
+@@ -0,0 +1,46 @@
++/*
++ * SWEET: WCD9375 codec + SLIMBUS/ADM routing (SM7150 audio).
++ *
++ * Status: skeleton. start() maps the SLIMBUS block and reads the codec
++ * slave id. Codec reset, slave attach and ADM routing run only with
++ * boot-arg sweetaudio=1. IOAudioFamily is not in the xnu tree, so the
++ * class derives from IOService. Route, volume and stream methods are the
++ * interface the audio bridge will call later.
++ */
++#ifndef _SWEET_WCD9375_AUDIO_H_
++#define _SWEET_WCD9375_AUDIO_H_
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOMemoryDescriptor.h>
++
++class SweetWcd9375Audio : public IOService {
++	OSDeclareDefaultStructors(SweetWcd9375Audio);
++
++private:
++	IOMemoryMap     *fSlimbus;   /* SLIMBUS / codec control block */
++	volatile uint32_t *fRegs;
++	uint32_t        fRoute;
++	uint32_t        fVolume;
++	bool            fStreaming;
++	bool            fReady;
++
++	uint32_t readReg(uint32_t off);
++	void     writeReg(uint32_t off, uint32_t val);
++
++	IOReturn codecReset(void);
++	IOReturn slaveAttach(void);
++	IOReturn admChannelMap(uint32_t route);
++
++public:
++	virtual bool init(OSDictionary *dict = NULL) override;
++	virtual bool start(IOService *provider) override;
++	virtual void stop(IOService *provider) override;
++	virtual void free(void) override;
++
++	IOReturn configureRoute(uint32_t routeId, uint32_t sampleRate, uint32_t channels);
++	IOReturn setVolume(uint32_t percent);
++	IOReturn startStream(void);
++	IOReturn stopStream(void);
++};
++
++#endif /* _SWEET_WCD9375_AUDIO_H_ */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWcd9375Audio.cpp
+@@ -0,0 +1,155 @@
++/*
++ * SWEET: WCD9375 bring-up (see SweetWcd9375Audio.h). Offsets and the
++ * SLIMBUS/ADM sequence are VERIFY placeholders, not checked against the
++ * qcom wcd937x driver. Gated by boot-arg sweetaudio=1.
++ */
++#include <IOKit/IOLib.h>
++#include <IOKit/IOService.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include "SweetWcd9375Audio.h"
++
++#define super IOService
++OSDefineMetaClassAndStructors(SweetWcd9375Audio, IOService)
++
++/* VERIFY: all offsets against wcd937x.c / slimbus registers */
++enum {
++	kCodecChipId   = 0x0000,  /* VERIFY */
++	kCodecReset    = 0x0010,  /* VERIFY */
++	kSlimSlaveId   = 0x0100,  /* VERIFY */
++	kAdmChanCtl    = 0x0200,  /* VERIFY */
++	kCodecVolume   = 0x0300,  /* VERIFY: step register */
++};
++
++uint32_t SweetWcd9375Audio::readReg(uint32_t off)
++{
++	return fRegs[off / 4];
++}
++
++void SweetWcd9375Audio::writeReg(uint32_t off, uint32_t val)
++{
++	fRegs[off / 4] = val;
++}
++
++bool SweetWcd9375Audio::init(OSDictionary *dict)
++{
++	if (!super::init(dict)) {
++		return false;
++	}
++	fSlimbus = NULL;
++	fRegs = NULL;
++	fRoute = 0;
++	fVolume = 50;
++	fStreaming = false;
++	fReady = false;
++	return true;
++}
++
++bool SweetWcd9375Audio::start(IOService *provider)
++{
++	if (!super::start(provider)) {
++		return false;
++	}
++	fSlimbus = provider->mapDeviceMemoryWithIndex(0);
++	if (!fSlimbus) {
++		printf("SWEET AUDIO: SLIMBUS map failed\n");
++		return false;
++	}
++	fRegs = (volatile uint32_t *)fSlimbus->getVirtualAddress();
++	printf("SWEET AUDIO: codec chip id %#x (VERIFY)\n", readReg(kCodecChipId));
++
++	if (!PE_parse_boot_argn("sweetaudio", NULL, 0)) {
++		printf("SWEET AUDIO: sweetaudio=1 not set; codec untouched\n");
++		registerService();
++		return true;
++	}
++	if (codecReset() != kIOReturnSuccess || slaveAttach() != kIOReturnSuccess) {
++		printf("SWEET AUDIO: codec bring-up failed\n");
++		return false;
++	}
++	fReady = true;
++	printf("SWEET AUDIO: ready\n");
++	registerService();
++	return true;
++}
++
++IOReturn SweetWcd9375Audio::codecReset(void)
++{
++	writeReg(kCodecReset, 1);  /* VERIFY: active-high reset */
++	IODelay(1000);
++	writeReg(kCodecReset, 0);
++	return kIOReturnSuccess;
++}
++
++IOReturn SweetWcd9375Audio::slaveAttach(void)
++{
++	/* VERIFY: poll SLIMBUS slave enumeration until the codec reports in. */
++	for (int i = 0; i < 1000; i++) {
++		if (readReg(kSlimSlaveId)) {
++			return kIOReturnSuccess;
++		}
++		IODelay(100);
++	}
++	return kIOReturnTimeout;
++}
++
++IOReturn SweetWcd9375Audio::admChannelMap(uint32_t route)
++{
++	writeReg(kAdmChanCtl, route);  /* VERIFY: ADM channel encoding */
++	return kIOReturnSuccess;
++}
++
++IOReturn SweetWcd9375Audio::configureRoute(uint32_t routeId, uint32_t sampleRate,
++    uint32_t channels)
++{
++	if (!fReady) {
++		return kIOReturnNotReady;
++	}
++	if (channels == 0 || channels > 2) {
++		return kIOReturnBadArgument;
++	}
++	fRoute = routeId;
++	printf("SWEET AUDIO: route %u rate %u ch %u\n", routeId, sampleRate, channels);
++	return admChannelMap(routeId);
++}
++
++IOReturn SweetWcd9375Audio::setVolume(uint32_t percent)
++{
++	if (percent > 100) {
++		percent = 100;
++	}
++	fVolume = percent;
++	if (fReady) {
++		writeReg(kCodecVolume, percent);  /* VERIFY: step scaling */
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn SweetWcd9375Audio::startStream(void)
++{
++	if (!fReady) {
++		return kIOReturnNotReady;
++	}
++	fStreaming = true;
++	printf("SWEET AUDIO: stream on route %u\n", fRoute);
++	return kIOReturnSuccess;
++}
++
++IOReturn SweetWcd9375Audio::stopStream(void)
++{
++	fStreaming = false;
++	printf("SWEET AUDIO: stream off\n");
++	return kIOReturnSuccess;
++}
++
++void SweetWcd9375Audio::stop(IOService *provider)
++{
++	stopStream();
++	super::stop(provider);
++}
++
++void SweetWcd9375Audio::free(void)
++{
++	OSSafeReleaseNULL(fSlimbus);
++	super::free();
++}
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -22,1 +22,2 @@
+ iokit/Kernel/arm/SweetWifi.cpp                                optional iokitcpp
++iokit/Kernel/arm/SweetWcd9375Audio.cpp                       optional iokitcpp
