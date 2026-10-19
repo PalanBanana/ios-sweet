@@ -80,6 +80,8 @@
 | 2026-10-19 | 검증 브랜치 | `ci-validate/v1`. **포크에만 push, main 금지** | `origin`은 업스트림이다. 세션 5에서 push URL을 DISABLED로 설정 |
 | 2026-10-19 (세션 5) | QRTR/SoundWire | **deferred 유지** (재확인) | 세션 5 지시. 착수하지 않음 |
 | 2026-10-19 (세션 7) | 로컬 컴파일 (`xnu-cc.py`)과 QEMU 스모크 | **미검증 (입력 부재)** | CI 로그와 `xnu-buildtree`, 스위프트 clang, `qemu-system-aarch64`, 커널이 이 머신에 없다. 우회하지 않는다. 첫 CI run 후 재시도 (`CI-PRECHECK.md` 항목 3, 4) |
+| 2026-10-19 (세션 8) | 스위프트 clang과 qemu 설치 | **첫 CI run 후로 연기** | 설치만으로는 검증이 늘지 않는다. `xnu-cc.py`는 CI 로그와 buildtree가 필요하고, QEMU는 커널이 필요하다. 정적으로 할 수 있는 검사 (include, 심볼, 시그니처, 접근성)는 세션 8에서 끝냈다 (확정 오류 0) |
+| 2026-10-19 (세션 8) | `xnu-cc.py` 수정 | **제안만, 미적용** | 환경변수 오버라이드 (`XNU_CC_CLANG`, `XNU_CC_CI_DXB`)와 `--help`. 도구 수정은 사용자 승인 사항 |
 
 참고: 원 요청의 날짜 자리표시(`2024-XX-XX`)는 실제 날짜 2026-10-19로 적었다.
 
