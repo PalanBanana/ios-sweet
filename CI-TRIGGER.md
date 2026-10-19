@@ -2,7 +2,7 @@
 
 이 문서는 사용자가 직접 실행하는 절차다. 이 저장소의 어떤 에이전트 세션도 `gh`를 쓰거나 push하지 않는다.
 
-- 검증 대상: 브랜치 `ci-validate/v1` = `2ca5a7b` (패치 0082–0084 포함, 8커밋)
+- 검증 대상: 브랜치 `ci-validate/v1` (세션 5 마감 HEAD). 패치 0082–0084, 게이트 값 검사, SWEET 가드, 패치 skip 검사 step을 포함한다. `git log --oneline origin/main..ci-validate/v1`로 확인.
 - 상태: 로컬에서는 한 번도 컴파일되지 않았다. 이 브랜치의 목적은 최초 컴파일 검증이다.
 
 ## 0. 반드시 읽기
@@ -10,7 +10,7 @@
 - **`origin`은 업스트림 `dipa-studio/ios-sweet`다 (fetch와 push 모두).** 이 저장소에서 `git push`를 인자 없이 실행하거나 `git push origin ...`을 쓰면 업스트림으로 간다. 하지 말 것.
 - **`main`에 push하지 말 것.** `main`으로 push하면 `xnu/patches/**` 변경에 대해 `xnu.yml`이 자동 실행된다 (`.github/workflows/xnu.yml`의 `push: branches: [main]`).
 - **PR을 만들어도 빌드는 시작되지 않는다.** 워크플로우에 `pull_request` 트리거가 없다 (`on:`은 `workflow_dispatch`와 `push: main`뿐이다). 빌드는 `gh workflow run`으로만 시작한다.
-- **권장 (사용자 결정):** 업스트림 push를 로컬에서 차단한다. `git -C ~/projects/ios-sweet remote set-url --push origin DISABLED`
+- **적용됨 (세션 5):** 로컬 `origin`의 push URL은 `DISABLED`다. fetch URL은 그대로다. push는 `fork` remote로만 한다.
 
 ## 1. CI 워크플로우 정찰
 
@@ -30,6 +30,9 @@
 | 산출물 | `xnu-kernel` (커널 바이너리 + `SHA256SUMS`), `xnu-buildtree` (7일 보관, 단일 파일 재컴파일용) | `upload-artifact` |
 
 ## 2. 패치가 적용되는 방식 (성공 판정 기준)
+
+build.sh는 blacktop/darwin-xnu-build의 upstream 스크립트다 (고정 SHA). 이 저장소에 없으며 수정하지 않는다. 대신 워크플로우의 `Verify patch application` step이 빌드 로그를 `tools/check-patch-log.sh dxb/build.log xnu/patches`로 검사한다. 다음 중 하나라도 해당하면 exit 1이다: 우리 `NNNN-*.patch`가 적용되지 않음, 화이트리스트 밖 skip, stage 스크립트 미실행, `Applying patch` 줄이 없음.
+
 
 `build.sh`의 `patches()` (426행 이후)는 다음과 같이 동작한다.
 
@@ -86,14 +89,13 @@ gh run view <RUN_ID> -R <USER>/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID>.txt
 gh run view <RUN_ID> -R <USER>/ios-sweet --log-failed > ~/ios-sweet-ci/run-<RUN_ID>-failed.txt
 ```
 
-성공이든 실패든 **패치 적용부터 확인한다.** 초록불만으로 판정하지 않는다.
+성공이든 실패든 **SWEET_PATCH_SUMMARY 줄부터 확인한다.** 초록불만으로 판정하지 않는다.
 
 ```sh
 F=~/ios-sweet-ci/run-<RUN_ID>.txt
-grep -c "Applying patch" $F                       # 기대: 88
-grep "Skipping patch" $F                          # 기대: blacktop 이름 4개뿐 (TrustCache, iobuffermemd_monterey, skywalk_sonoma, syntax_checker_sonoma)
-grep "Skipping patch" $F | grep -c "/0[0-9][0-9][0-9]-"   # 기대: 0. 0이 아니면 우리 패치 중 하나가 빠진 것이다
-grep -n "error:" $F | head -50                    # 컴파일 오류 (있다면)
+grep "SWEET_PATCH_SUMMARY" $F   # 기대: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 stage_scripts=3/3
+grep "SWEET_PATCH_FAILURE" $F   # 실패 시 어떤 패치인지
+grep -n "error:" $F | head -50  # 컴파일 오류 (있다면)
 ```
 
 `Skipping patch`에 `0NNN-`가 하나라도 나오면, 그 패치가 실제로 빠진 채 빌드된 것이다. 이 경우 성공으로 치지 않는다.
@@ -106,13 +108,13 @@ grep -n "error:" $F | head -50                    # 컴파일 오류 (있다면)
 |---|---|---|---|---|---|
 | 1 | 0082–0084 `.cpp` (처음 컴파일) | 헤더로 확인한 API는 대부분 맞다 (아래 5절). 남은 위험은 실제 컴파일 세부에서 나온다 | **중간** | 처음 컴파일되는 코드 | 실패 시 `xnu-buildtree` 아티팩트로 로컬 재컴파일 |
 | 2 | 0081 `bsd/dev/sweet_usb.c` | 빌드 기록이 없다. 새 include (`net/if_media.h`, `net/dlil.h`)와 `SIOCGIFMEDIA`, `KEV_DL_LINK_ON`은 헤더에 존재함을 확인 | 낮음~중간 | `bsd/net/if_media.h`, `bsd/net/net_kev.h:67`, `bsd/sys/sockio.h:136` | 로그에서 `sweet_usb` 오류 확인 |
-| 3 | 패치 건너뜀 (무음) | 우리 패치가 `git apply --check`에서 실패하면 경고만 찍고 빌드가 성공한다 | **높음** (성공 오판) | `build.sh:472-477` | 2절의 grep 검사 |
+| 3 | 패치 건너뜀 (무음) | build.sh는 적용 실패 패치를 경고만 찍고 넘어간다 | 낮음 (잔여) | `build.sh:472-477`. `tools/check-patch-log.sh`가 exit 1로 막는다 | 워크플로우 `Verify patch application` step (세션 5, `66ea9a5`) |
 | 4 | 스테이지 스크립트의 외부 fetch | GitHub `libpthread`/`hfs`와 `bearssl.org`에서 받는다. 실패하면 빌드가 즉시 중단된다 (크게 실패) | 낮음 | `build.sh:5`. 과거 CI에서 0019/0020/0026 성공 이력 | 재실행 |
 | 5 | 포크 Actions 비활성 | 포크는 Actions가 꺼진 상태로 시작한다. `gh workflow run`이 실패한다 | 중간 (환경) | GitHub 기본 동작 | 3절 사전 조건에서 켠다 |
 | 6 | macOS 러너 분 | 포크가 공개면 무료다. 비공개면 분 한도나 결제 문제로 실패할 수 있다 (NOTES에 과거 사례 있음) | 중간 (환경) | `NOTES.md` "Repo made PUBLIC" 항목 | 공개 포크 사용 |
 | 7 | KDK 경로 | `/Library/Developer/KDKs/KDK_13.5_22G74.kdk`가 러너에 없으면 `KDKROOT not found`로 실패한다 | 낮음 | `build.sh:253`. 과거 13.5 빌드 성공 이력 | 로그 확인 |
-| 8 | 게이트 값 검사 (런타임) | `PE_parse_boot_argn(name, NULL, 0)`은 이름의 존재만 본다. `sweetgpu=0`도 게이트를 연다 | 낮음 (컴파일과 무관) | `pexpert/gen/bootargs.c` `max_len == 0` 분기 | 다음 세션에서 값 검사로 수정 |
-| 9 | 가드 관행 | 0082–0084 `.cpp`에는 `#if defined(SWEET)` 가드가 없다. 기존 파일은 `SweetCPU.cpp:8`, `SweetPlatformExpert.cpp:8`에서 가드한다 | 낮음 | CI는 SWEET 전용이라 영향 없음 | 다음 세션에서 맞춘다 |
+| 8 | 게이트 값 검사 (런타임) | 수정됨. 값이 정확히 1일 때만 연다 (`sweetgpu=0`은 닫힘) | 해결 | `21b42d0`. `bootargs.c:362` | — |
+| 9 | 가드 관행 | 수정됨. 세 `.cpp`에 `#if defined(SWEET)` 가드 추가 | 해결 | `723c65b` | — |
 | 10 | 미사용 include와 함수 | `SweetGPU.cpp`의 `kern/clock.h`, `IOMapper.h`, 오디오의 `codecReset`/`slaveAttach`는 사용되지 않는다 | 낮음 (경고) | `BUILD_WERROR=0` | 없음 |
 | 11 | `printf("%zu")` (Wi-Fi) | xnu printf가 `z` 수식자를 지원한다 | 낮음 | `osfmk/kern/printf.c:366` 확인 | 없음 |
 
@@ -136,9 +138,9 @@ grep -n "error:" $F | head -50                    # 컴파일 오류 (있다면)
 
 ## 6. 로그 판독 체크리스트
 
-1. `Running script` 줄이 3개 (`0019`, `0020`, `0026`)이고 오류가 없다.
-2. `Applying patch` 줄이 **88개**다 (우리 84 + blacktop 4).
-3. `Skipping patch` 줄은 blacktop 이름 4개뿐이다. `0NNN-`가 하나라도 있으면 실패로 본다.
-4. `error:` 줄이 없다. `make install`이 성공했다.
+1. `SWEET_PATCH_SUMMARY: result=PASS`가 있다. FAIL이면 바로 아래 `SWEET_PATCH_FAILURE` 줄이 원인이다.
+2. `applied=88`, `skipped=4`, `baseline_skipped=4`, `failed=0`, `stage_scripts=3/3`.
+3. `skipped`의 4개는 blacktop 이름뿐이다 (TrustCache, iobuffermemd_monterey, skywalk_sonoma, syntax_checker_sonoma).
+4. `error:` 줄이 없고 `make install`이 성공했다.
 5. 아티팩트 `xnu-kernel`에 커널 바이너리와 `SHA256SUMS`가 있다.
-6. 실패하면 `error:` 줄을 파일 단위로 모은다. `xnu-buildtree`를 받아 실패한 컴파일 명령을 로컬에서 재현한다 (`AGENTS.md` 절차).
+6. 실패하면 `xnu-buildtree`를 받아 실패한 컴파일 명령을 로컬에서 재현한다 (`AGENTS.md` 절차).
