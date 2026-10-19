@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,52 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
@@ -45,10 +45,9 @@
 +	virtual void     free(void) override;
 +
 +	/*
-+	 * Submit one frame: the surface lives at a physical address of
-+	 * `bytes` length. Queues a CP_MEM_TO_MEM packet and bumps WPTR.
-+	 * Called from the framebuffer path (SweetFramebuffer.cpp) once the
-+	 * GPU path is enabled.
++	 * Frame submission. 미확정: returns kIOReturnUnsupported until a command
++	 * stream (CP_INDIRECT_BUFFER) and fence design exists. CP_MEM_TO_MEM
++	 * copies dwords and cannot move a surface (adreno_pm4.xml:1368).
 +	 */
 +	IOReturn submitFrame(uint64_t surfacePA, uint32_t bytes, uint32_t *fenceOut);
 +};
@@ -56,7 +55,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,235 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -75,34 +74,44 @@
 +#define super IOService
 +OSDefineMetaClassAndStructors(MsmGpuAdreno618, IOService)
 +
-+/* VERIFY: all offsets below against a6xx.xml.h (SM7150 / Adreno 618 = a618) */
++/*
++ * Dword indices, as in Mesa src/freedreno/registers/adreno/a6xx.xml and
++ * adreno_common.xml. Byte offset = index * 4. Kernel: adreno_gpu.h:766
++ * (gpu->mmio + (addr << 2)). Entries marked (64) are reg64 (lo at index,
++ * hi at index+1).
++ */
 +enum {
-+	kRbbmStatus        = 0x0210,  /* VERIFY */
-+	kRbbmSwReset       = 0x0018,  /* VERIFY */
-+	kRbbmInt0Mask      = 0x0300,  /* VERIFY */
-+	kGbifScache0       = 0x3b00,  /* VERIFY */
-+	kGbifScache1       = 0x3b04,  /* VERIFY */
-+	kCpRbBase          = 0x0800,  /* VERIFY */
-+	kCpRbCntl          = 0x0802,  /* VERIFY */
-+	kCpRbRptrAddr      = 0x0804,  /* VERIFY */
-+	kCpRbWptr          = 0x0805,  /* VERIFY */
-+	kCpIntCntl         = 0x0a00,  /* VERIFY */
-+	kCpMeCntl          = 0x0a08,  /* VERIFY */
-+	kCpMeStatus        = 0x0a0c,  /* VERIFY */
-+	kGpuIdentity       = 0x0000,  /* VERIFY: chip-id register */
++	kRbbmStatus        = 0x0210,  /* a6xx.xml:554 RBBM_STATUS */
++	kRbbmSwResetCmd    = 0x0043,  /* a6xx.xml:806 RBBM_SW_RESET_CMD */
++	kRbbmInt0Mask      = 0x0038,  /* a6xx.xml:801 RBBM_INT_0_MASK */
++	kRbbmInt0Status    = 0x0201,  /* a6xx.xml:552 RBBM_INT_0_STATUS */
++	kGbifScache0       = 0x3c01,  /* a6xx.xml:1273 GBIF_SCACHE_CNTL0 (rmw in kernel, value unconfirmed) */
++	kGbifScache1       = 0x3c02,  /* a6xx.xml:1274 GBIF_SCACHE_CNTL1 (rmw in kernel, value unconfirmed) */
++	kCpRbBase          = 0x0800,  /* a6xx.xml:147 CP_RB_BASE (64) */
++	kCpRbCntl          = 0x0802,  /* a6xx.xml:148 CP_RB_CNTL */
++	kCpRbRptrAddr     = 0x0804,  /* a6xx.xml:150 CP_RB_RPTR_ADDR (64) */
++	kCpRbRptr          = 0x0806,  /* a6xx.xml:151 CP_RB_RPTR */
++	kCpRbWptr          = 0x0807,  /* a6xx.xml:152 CP_RB_WPTR */
++	kCpIntCntl         = 0x01f2,  /* adreno_common.xml:184 CP_INT_CNTL (not redefined in a6xx.xml) */
++	kCpMeCntl          = 0x01f6,  /* adreno_common.xml:197 CP_ME_CNTL */
++	kCpMeStatus        = 0x01f7,  /* adreno_common.xml:201 CP_ME_STATUS */
++	kGpuIdentity       = 0x0000,  /* VERIFY (미확정): no chip-id register found in a6xx.xml */
 +};
++
++/* a6xx.xml:554 RBBM_STATUS bit 0 = CP_AHB_BUSY_CX_MASTER (ignored for idle) */
++static const uint32_t kRbbmStatusCxAhbBusy = 1u << 0;
 +
 +static const uint32_t kRingBytes = 64 * 1024;
 +static const uint32_t kZapBytes  = 64 * 1024;
 +
-+uint32_t MsmGpuAdreno618::readReg(uint32_t off)
++uint32_t MsmGpuAdreno618::readReg(uint32_t idx)
 +{
-+	return fRegs[off / 4];
++	return fRegs[idx];
 +}
 +
-+void MsmGpuAdreno618::writeReg(uint32_t off, uint32_t val)
++void MsmGpuAdreno618::writeReg(uint32_t idx, uint32_t val)
 +{
-+	fRegs[off / 4] = val;
++	fRegs[idx] = val;
 +}
 +
 +bool MsmGpuAdreno618::init(OSDictionary *dict)
@@ -143,8 +152,8 @@
 +	printf("SWEET GPU: mmio va=%p len=%llu\n", fRegs,
 +	    (unsigned long long)fMmio->getLength());
 +
-+	uint32_t id = readReg(kGpuIdentity);
-+	printf("SWEET GPU: identity %#x (VERIFY)\n", id);
++	/* identity register not read: no chip-id offset confirmed (미확정) */
++	printf("SWEET GPU: mmio mapped (identity not read: 미확정)\n");
 +
 +	if (!PE_parse_boot_argn("sweetgpu", NULL, 0)) {
 +		printf("SWEET GPU: sweetgpu=1 not set; leaving hardware untouched\n");
@@ -176,7 +185,8 @@
 +	uint64_t deadline = mach_absolute_time() +
 +	    (uint64_t)timeoutUs * 24;  /* ~24 MHz timebase, VERIFY */
 +	while (mach_absolute_time() < deadline) {
-+		if (!(readReg(kRbbmStatus) & (1u << 31))) {  /* VERIFY: GPU busy bit */
++		/* a6xx_gpu.c:128: idle when RBBM_STATUS & ~CP_AHB_BUSY_CX_MASTER == 0 */
++		if (!(readReg(kRbbmStatus) & ~kRbbmStatusCxAhbBusy)) {
 +			return true;
 +		}
 +		IODelay(10);
@@ -186,16 +196,21 @@
 +
 +IOReturn MsmGpuAdreno618::powerUpSequence(void)
 +{
-+	/* Order follows msm adreno a6xx_gpu_hw_init (VERIFY each step). */
-+	writeReg(kRbbmSwReset, 1);
-+	IODelay(100);
-+	writeReg(kRbbmSwReset, 0);
++	/* a6xx_gpu_sw_reset(): assert then deassert RBBM_SW_RESET_CMD (a6xx_gpu.c:2128-2131) */
++	writeReg(kRbbmSwResetCmd, 1);
++	(void)readReg(kRbbmSwResetCmd);
++	IODelay(1);
++	writeReg(kRbbmSwResetCmd, 0);
++	(void)readReg(kRbbmSwResetCmd);
++	IODelay(1);
 +
-+	writeReg(kGbifScache0, 0x1);  /* VERIFY */
-+	writeReg(kGbifScache1, 0x1);  /* VERIFY */
++	/* 0 = all RBBM_INT_0 sources masked (a6xx_gpu.c:1849 writes 0). */
++	writeReg(kRbbmInt0Mask, 0);
 +
-+	writeReg(kRbbmInt0Mask, 0);   /* mask everything until the ring exists */
-+
++	/*
++	 * Not written here (미확정): GBIF_SCACHE_CNTL0/1 values (kernel uses
++	 * read-modify-write, a6xx_gpu.c:1989-2050) and the CP mode registers.
++	 */
 +	if (!waitIdle(100000)) {
 +		printf("SWEET GPU: RBBM not idle after reset\n");
 +		return kIOReturnTimeout;
@@ -233,47 +248,39 @@
 +		return kIOReturnNoMemory;
 +	}
 +	uint64_t ringPA = (uint64_t)fRingBuf->getPhysicalAddress();
-+	/* VERIFY: CP_RB_BASE takes a 32-bit address; ring must be below 4 GiB. */
-+	if (ringPA >> 32) {
-+		printf("SWEET GPU: ring above 4 GiB (%#llx)\n", (unsigned long long)ringPA);
-+		return kIOReturnNoResources;
-+	}
++	/* gpu_write64(CP_RB_BASE) at a6xx_gpu.c:1446: lo at index, hi at index+1 */
 +	writeReg(kCpRbBase, (uint32_t)ringPA);
-+	writeReg(kCpRbCntl, 0x0000000f);  /* VERIFY: ring size encoding */
++	writeReg(kCpRbBase + 1, (uint32_t)(ringPA >> 32));
++	/*
++	 * 미확정: CP_RB_CNTL value (MSM_GPU_RB_CNTL_DEFAULT, a6xx_gpu.c:1453)
++	 * is defined outside the fetched files, so it is not written here.
++	 */
 +	fRingWptr = 0;
 +	writeReg(kCpRbWptr, 0);
-+	writeReg(kCpIntCntl, 0);
-+	printf("SWEET GPU: ring PA=%#x\n", (uint32_t)ringPA);
++	printf("SWEET GPU: ring PA=%#llx (CP_RB_CNTL not written, 미확정)\n",
++	    (unsigned long long)ringPA);
 +	return kIOReturnSuccess;
 +}
 +
 +IOReturn MsmGpuAdreno618::submitFrame(uint64_t surfacePA, uint32_t bytes,
 +    uint32_t *fenceOut)
 +{
-+	if (!fReady) {
-+		return kIOReturnNotReady;
-+	}
-+	/* Packet layout is VERIFY (CP_MEM_TO_MEM). Writes go through the ring. */
-+	volatile uint32_t *ring = (volatile uint32_t *)fRingBuf->getBytesNoCopy();
-+	uint32_t slots = kRingBytes / 4;
-+	if (fRingWptr + 4 > slots) {
-+		fRingWptr = 0;
-+	}
-+	ring[fRingWptr++] = 0x40000000u | 3;   /* VERIFY: type-7 header */
-+	ring[fRingWptr++] = (uint32_t)surfacePA;
-+	ring[fRingWptr++] = (uint32_t)(surfacePA >> 32);
-+	ring[fRingWptr++] = bytes;
-+	fFence++;
-+	writeReg(kCpRbWptr, fRingWptr);
-+	if (fenceOut) {
-+		*fenceOut = fFence;
-+	}
-+	return kIOReturnSuccess;
++	/*
++	 * 미확정: a frame is not a CP_MEM_TO_MEM. That packet copies dwords
++	 * (adreno_pm4.xml:1368, DST + SRC_A addresses), so it cannot move a
++	 * surface. Real submission needs a command stream (CP_INDIRECT_BUFFER)
++	 * and a fence. Not implemented until that design exists.
++	 */
++	(void)surfacePA;
++	(void)bytes;
++	(void)fenceOut;
++	return kIOReturnUnsupported;
 +}
 +
 +void MsmGpuAdreno618::stop(IOService *provider)
 +{
-+	writeReg(kRbbmInt0Mask, ~0u);
++	/* 0 masks all RBBM_INT_0 sources (a6xx_gpu.c:1849); ~0u would enable them */
++	writeReg(kRbbmInt0Mask, 0);
 +	super::stop(provider);
 +}
 +
@@ -288,4 +295,4 @@
 +++ b/iokit/conf/files.arm64
 @@ -22,1 +22,2 @@
  iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp             optional iokitcpp
-+iokit/Kernel/arm/SweetGPU.cpp                                 optional iokitcpp
++iokit/Kernel/arm/SweetGPU.cpp                                    optional iokitcpp
