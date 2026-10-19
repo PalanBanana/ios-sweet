@@ -46,11 +46,21 @@
 +#endif /* _SWEET_WIFI_WCN3990_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.cpp
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,168 @@
 +/*
-+ * SWEET: WCN3990 bring-up (see SweetWifi.h). Every offset and rail order
-+ * marked VERIFY is unchecked. Rail order follows the Qualcomm bring-up
-+ * notes from the brief, vddio first. Gated by boot-arg sweetwifi=1.
++ * SWEET: WCN3990 bring-up (see SweetWifi.h).
++ *
++ * VERIFY result (ath10k source, xnu-independent): this class's bus model is
++ * WRONG. ath10k drives WCN3990 over SNOC (drivers/net/wireless/ath/ath10k/
++ * snoc.c) and loads firmware through QMI (ath10k_qmi_wlan_enable,
++ * snoc.c:1018, qmi.c). It does not stream firmware over a GENI SE FIFO. The
++ * GENI path below is kept only as a reference and is unreachable: sweetwifi=1
++ * logs the mismatch and returns false.
++ *
++ * Rail names from snoc.c (regulator list at top of file): vdd-0.8-cx-mx,
++ * vdd-1.8-xo, vdd-1.3-rfa, vdd-3.3-ch0, vdd-3.3-ch1. snoc.c:1814-1818
++ * says the first rail powers part of the SoC and the rest are handled by
++ * pwrseq, so the "vddio first" order in the brief is NOT supported.
 + */
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOService.h>
@@ -70,16 +80,16 @@
 +	kGeniFifoStat  = 0x0800,  /* VERIFY: TX FIFO status */
 +};
 +
-+/* Order is mandatory: vddio before the RF and core rails. */
++/* snoc.c regulator names (voltages 미확정: not in the fetched files). */
 +static const struct {
 +	const char *name;
 +	uint32_t    uv;
 +} kRailOrder[] = {
-+	{ "vddio",     1800000 },  /* VERIFY: voltage */
-+	{ "vddrfa0p8", 800000 },   /* VERIFY */
-+	{ "vddrfa1p3", 1300000 },  /* VERIFY */
-+	{ "vddmx",     900000 },   /* VERIFY */
-+	{ "vddcx",     900000 },   /* VERIFY */
++	{ "vdd-0.8-cx-mx", 0 },  /* snoc.c: first rail, powers part of the SoC */
++	{ "vdd-1.8-xo",    0 },
++	{ "vdd-1.3-rfa",   0 },
++	{ "vdd-3.3-ch0",   0 },
++	{ "vdd-3.3-ch1",   0 },
 +};
 +
 +uint32_t Wcn3990Controller::readReg(uint32_t off)
@@ -115,7 +125,7 @@
 +		return false;
 +	}
 +	fRegs = (volatile uint32_t *)fGeni->getVirtualAddress();
-+	printf("SWEET WIFI: GENI fw_rev=%#x (VERIFY)\n", readReg(kGeniFwCfg));
++	printf("SWEET WIFI: GENI SE mapped (no register read: offsets unverified)\n");
 +
 +	if (!PE_parse_boot_argn("sweetwifi", NULL, 0)) {
 +		printf("SWEET WIFI: sweetwifi=1 not set; rails and firmware untouched\n");
@@ -123,21 +133,13 @@
 +		return true;
 +	}
 +
-+	for (size_t i = 0; i < sizeof(kRailOrder) / sizeof(kRailOrder[0]); i++) {
-+		IOReturn r = voteRpmhRegulator(kRailOrder[i].name, kRailOrder[i].uv, true);
-+		if (r != kIOReturnSuccess) {
-+			printf("SWEET WIFI: rail %s vote failed %#x\n", kRailOrder[i].name, r);
-+			return false;
-+		}
-+	}
-+	if (geniSeInit() != kIOReturnSuccess || streamFirmware() != kIOReturnSuccess) {
-+		printf("SWEET WIFI: firmware stream failed\n");
-+		return false;
-+	}
-+	fReady = true;
-+	printf("SWEET WIFI: ready (firmware streamed)\n");
-+	registerService();
-+	return true;
++	/*
++	 * Unsupported bus model (see the file header). The rail loop and GENI
++	 * path are not run: they would power rails and stream to the wrong
++	 * device. Replace with an SNOC + QMI design before enabling.
++	 */
++	printf("SWEET WIFI: sweetwifi=1 refused: WCN3990 is SNOC+QMI (ath10k), not GENI FIFO\n");
++	return false;
 +}
 +
 +IOReturn Wcn3990Controller::voteRpmhRegulator(const char *name, uint32_t uv, bool on)
@@ -215,6 +217,6 @@
 +}
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -22,1 +22,2 @@
- iokit/Kernel/arm/SweetGPU.cpp                                 optional iokitcpp
-+iokit/Kernel/arm/SweetWifi.cpp                                optional iokitcpp
+@@ -23,1 +23,2 @@
+ iokit/Kernel/arm/SweetGPU.cpp                                    optional iokitcpp
++iokit/Kernel/arm/SweetWifi.cpp                                   optional iokitcpp
