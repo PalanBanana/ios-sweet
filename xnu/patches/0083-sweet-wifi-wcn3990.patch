@@ -58,7 +58,7 @@
 +#endif /* _SWEET_WIFI_WCN3990_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWifi.cpp
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,191 @@
 +/*
 + * SWEET: WCN3990 controller, SNOC + QMI model (see SweetWifi.h).
 + *
@@ -66,6 +66,9 @@
 + * files and stay 미확정 (device tree). The earlier GENI FIFO model was
 + * refuted (NOTES.md, P0) and is not carried here.
 + */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOService.h>
 +#include <libkern/libkern.h>
@@ -245,6 +248,8 @@
 +	OSSafeReleaseNULL(fSnocMem);
 +	super::free();
 +}
++
++#endif /* SWEET */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
 @@ -23,1 +23,2 @@

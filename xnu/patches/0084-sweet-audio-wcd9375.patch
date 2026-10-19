@@ -52,7 +52,7 @@
 +#endif /* _SWEET_WCD9375_AUDIO_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetWcd9375Audio.cpp
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,172 @@
 +/*
 + * SWEET: WCD9375 bring-up (see SweetWcd9375Audio.h).
 + *
@@ -61,6 +61,9 @@
 + * not SLIMBUS. Register names come from wcd937x.h (WCD937X_*), and none of
 + * the offsets below are confirmed against it. sweetaudio=1 is refused.
 + */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOService.h>
 +#include <libkern/libkern.h>
@@ -220,6 +223,8 @@
 +	OSSafeReleaseNULL(fSlimbus);
 +	super::free();
 +}
++
++#endif /* SWEET */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
 @@ -24,1 +24,2 @@

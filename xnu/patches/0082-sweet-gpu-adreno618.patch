@@ -57,7 +57,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,252 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -66,6 +66,9 @@
 + * block and performs no register access. Items still open for hardware
 + * bring-up are marked 미확정 with the reason.
 + */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
 +#include <IOKit/IOLib.h>
 +#include <IOKit/IOService.h>
 +#include <IOKit/IOMapper.h>
@@ -305,6 +308,8 @@
 +	OSSafeReleaseNULL(fMmio);
 +	super::free();
 +}
++
++#endif /* SWEET */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
 @@ -22,1 +22,2 @@
