@@ -1,0 +1,220 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWifi.h
+@@ -0,0 +1,43 @@
++/*
++ * SWEET: WCN3990 Wi-Fi/BT bring-up over GENI SE firmware streaming.
++ *
++ * Status: skeleton. start() maps the GENI SE block and logs its state.
++ * Rail votes and firmware streaming run only with boot-arg sweetwifi=1.
++ * IO80211Family is a separate kext and is not in the xnu tree, so this
++ * class derives from IOService and exposes a narrow interface for the
++ * 802.11 bridge to be added later.
++ */
++#ifndef _SWEET_WIFI_WCN3990_H_
++#define _SWEET_WIFI_WCN3990_H_
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOMemoryDescriptor.h>
++
++class Wcn3990Controller : public IOService {
++	OSDeclareDefaultStructors(Wcn3990Controller);
++
++private:
++	IOMemoryMap                 *fGeni;      /* GENI SE register block */
++	volatile uint32_t           *fRegs;
++	IOBufferMemoryDescriptor    *fFwBuf;     /* firmware staging buffer */
++	bool                        fReady;
++
++	uint32_t readReg(uint32_t off);
++	void     writeReg(uint32_t off, uint32_t val);
++
++	IOReturn voteRpmhRegulator(const char *name, uint32_t uv, bool on);
++	IOReturn geniSeInit(void);
++	IOReturn geniFifoWrite(uint32_t word);
++	IOReturn streamFirmware(void);
++
++public:
++	virtual bool init(OSDictionary *dict = NULL) override;
++	virtual bool start(IOService *provider) override;
++	virtual void stop(IOService *provider) override;
++	virtual void free(void) override;
++
++	IOReturn enable(void);
++	IOReturn disable(void);
++};
++
++#endif /* _SWEET_WIFI_WCN3990_H_ */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWifi.cpp
+@@ -0,0 +1,166 @@
++/*
++ * SWEET: WCN3990 bring-up (see SweetWifi.h). Every offset and rail order
++ * marked VERIFY is unchecked. Rail order follows the Qualcomm bring-up
++ * notes from the brief, vddio first. Gated by boot-arg sweetwifi=1.
++ */
++#include <IOKit/IOLib.h>
++#include <IOKit/IOService.h>
++#include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
++#include "SweetWifi.h"
++
++#define super IOService
++OSDefineMetaClassAndStructors(Wcn3990Controller, IOService)
++
++/* VERIFY: GENI SE register offsets against the SE programming guide */
++enum {
++	kGeniFwCfg     = 0x0000,  /* VERIFY: GENI_FW_REVISION */
++	kGeniCfg       = 0x0240,  /* VERIFY: GENI_CFG_REG */
++	kGeniStatus    = 0x0240,  /* VERIFY */
++	kGeniTxFifo    = 0x0110,  /* VERIFY: TX FIFO data port */
++	kGeniFifoStat  = 0x0800,  /* VERIFY: TX FIFO status */
++};
++
++/* Order is mandatory: vddio before the RF and core rails. */
++static const struct {
++	const char *name;
++	uint32_t    uv;
++} kRailOrder[] = {
++	{ "vddio",     1800000 },  /* VERIFY: voltage */
++	{ "vddrfa0p8", 800000 },   /* VERIFY */
++	{ "vddrfa1p3", 1300000 },  /* VERIFY */
++	{ "vddmx",     900000 },   /* VERIFY */
++	{ "vddcx",     900000 },   /* VERIFY */
++};
++
++uint32_t Wcn3990Controller::readReg(uint32_t off)
++{
++	return fRegs[off / 4];
++}
++
++void Wcn3990Controller::writeReg(uint32_t off, uint32_t val)
++{
++	fRegs[off / 4] = val;
++}
++
++bool Wcn3990Controller::init(OSDictionary *dict)
++{
++	if (!super::init(dict)) {
++		return false;
++	}
++	fGeni = NULL;
++	fRegs = NULL;
++	fFwBuf = NULL;
++	fReady = false;
++	return true;
++}
++
++bool Wcn3990Controller::start(IOService *provider)
++{
++	if (!super::start(provider)) {
++		return false;
++	}
++	fGeni = provider->mapDeviceMemoryWithIndex(0);
++	if (!fGeni) {
++		printf("SWEET WIFI: GENI SE map failed\n");
++		return false;
++	}
++	fRegs = (volatile uint32_t *)fGeni->getVirtualAddress();
++	printf("SWEET WIFI: GENI fw_rev=%#x (VERIFY)\n", readReg(kGeniFwCfg));
++
++	if (!PE_parse_boot_argn("sweetwifi", NULL, 0)) {
++		printf("SWEET WIFI: sweetwifi=1 not set; rails and firmware untouched\n");
++		registerService();
++		return true;
++	}
++
++	for (size_t i = 0; i < sizeof(kRailOrder) / sizeof(kRailOrder[0]); i++) {
++		IOReturn r = voteRpmhRegulator(kRailOrder[i].name, kRailOrder[i].uv, true);
++		if (r != kIOReturnSuccess) {
++			printf("SWEET WIFI: rail %s vote failed %#x\n", kRailOrder[i].name, r);
++			return false;
++		}
++	}
++	if (geniSeInit() != kIOReturnSuccess || streamFirmware() != kIOReturnSuccess) {
++		printf("SWEET WIFI: firmware stream failed\n");
++		return false;
++	}
++	fReady = true;
++	printf("SWEET WIFI: ready (firmware streamed)\n");
++	registerService();
++	return true;
++}
++
++IOReturn Wcn3990Controller::voteRpmhRegulator(const char *name, uint32_t uv, bool on)
++{
++	/*
++	 * No RPMh bridge for IOKit yet. The C path in bsd/dev/sweet_rpmh.c
++	 * (sweet_rpmh_vreg_enable) already does the vote for L11C, so this
++	 * logs the request and returns an error until that bridge is exported.
++	 */
++	printf("SWEET WIFI: vote %s %u uV on=%d (RPMh bridge not exported)\n",
++	    name, uv, on);
++	return kIOReturnUnsupported;
++}
++
++IOReturn Wcn3990Controller::geniSeInit(void)
++{
++	/* VERIFY: set M_CMD + S_CMD + EN in GENI_CFG, then poll GENI_STATUS. */
++	writeReg(kGeniCfg, 0x7);
++	IODelay(50);
++	uint32_t st = readReg(kGeniStatus);
++	printf("SWEET WIFI: GENI status %#x\n", st);
++	return kIOReturnSuccess;
++}
++
++IOReturn Wcn3990Controller::geniFifoWrite(uint32_t word)
++{
++	for (int i = 0; i < 10000; i++) {
++		if (readReg(kGeniFifoStat) & 0x1) {  /* VERIFY: TX FIFO has room */
++			writeReg(kGeniTxFifo, word);
++			return kIOReturnSuccess;
++		}
++		IODelay(10);
++	}
++	return kIOReturnTimeout;
++}
++
++IOReturn Wcn3990Controller::streamFirmware(void)
++{
++	/* The WLAN image sits in the vendor partition (not readable here). */
++	fFwBuf = IOBufferMemoryDescriptor::withOptions(
++	    kIODirectionOut | kIOMemoryKernelUserShared, 256 * 1024, page_size);
++	if (!fFwBuf) {
++		return kIOReturnNoMemory;
++	}
++	if (!PE_parse_boot_argn("sweetwififw", NULL, 0)) {
++		printf("SWEET WIFI: firmware blob not provided (sweetwififw unset)\n");
++		OSSafeReleaseNULL(fFwBuf);
++		return kIOReturnNotFound;
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn Wcn3990Controller::enable(void)
++{
++	return fReady ? kIOReturnSuccess : kIOReturnNotReady;
++}
++
++IOReturn Wcn3990Controller::disable(void)
++{
++	fReady = false;
++	return kIOReturnSuccess;
++}
++
++void Wcn3990Controller::stop(IOService *provider)
++{
++	disable();
++	super::stop(provider);
++}
++
++void Wcn3990Controller::free(void)
++{
++	OSSafeReleaseNULL(fFwBuf);
++	OSSafeReleaseNULL(fGeni);
++	super::free();
++}
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -22,1 +22,2 @@
+ iokit/Kernel/arm/SweetGPU.cpp                                 optional iokitcpp
++iokit/Kernel/arm/SweetWifi.cpp                                optional iokitcpp
