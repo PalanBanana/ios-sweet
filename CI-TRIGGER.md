@@ -55,6 +55,8 @@ build.sh는 blacktop/darwin-xnu-build의 upstream 스크립트다 (고정 SHA). 
 
 ### 사전 조건
 
+**포크 저장소 이름은 반드시 `ios-sweet`여야 한다.** `tools/xnu-cc.py`의 `CI_DXB`가 `/Users/runner/work/ios-sweet/ios-sweet/dxb`로 고정되어 있고, CI 로그의 컴파일 명령 경로가 이 접두사와 맞아야 명령을 찾는다 (`tools/xnu-cc.py:23`). 워크플로우는 저장소를 기본 경로에 체크아웃하므로, 이름이 다르면 로컬 재현이 깨진다.
+
 ```sh
 sudo pacman -S github-cli          # gh 설치
 gh auth login                      # 인증

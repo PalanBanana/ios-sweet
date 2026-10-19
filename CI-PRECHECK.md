@@ -54,3 +54,59 @@ python3 tools/xnu-cc.py $D/build.log $D/bt \
 - 항목 1, 2, 5, 6, 8: 통과.
 - 항목 3, 4, 7: 미검증. 사유와 조치는 위 표에 있다.
 - 로컬 컴파일과 QEMU 스모크는 입력이 없어서 실행하지 않았다. 억지 우회는 하지 않았다.
+
+## 세션 8: 정적 컴파일 대조 (컴파일러 없음)
+
+0082–0084 (`SweetGPU.cpp`/`.h`, `SweetWifi.cpp`/`.h`, `SweetWcd9375Audio.cpp`/`.h`)를 `~/refs/xnu-sweet`의 적용된 트리에서 xnu-8796.141.3 헤더와 대조했다. 컴파일은 하지 않았다.
+
+| 파일 | include | 심볼 | 시그니처 | 접근성 | 판정 |
+|---|---|---|---|---|---|
+| `SweetGPU.cpp` | 8/8 해결 | XNU 이름 30개 전부 선언됨 | 멤버 12/12 일치, 호출 29건 해결 | 멤버 함수 전부 `public:` | 확정 오류 0 |
+| `SweetGPU.h` | 3/3 해결 | (헤더) | 메서드 선언 일치 | `public:` | 확정 오류 0 |
+| `SweetWifi.cpp` | 6/6 해결 | XNU 이름 전부 선언됨 | 멤버 14/14 일치, 호출 24건 해결 | `public:` | 확정 오류 0 |
+| `SweetWifi.h` | 2/2 해결 | (헤더) | 일치 | `public:` | 확정 오류 0 |
+| `SweetWcd9375Audio.cpp` | 6/6 해결 | XNU 이름 전부 선언됨 | 멤버 13/13 일치, 호출 26건 해결 | `public:` | 확정 오류 0 |
+| `SweetWcd9375Audio.h` | 2/2 해결 | (헤더) | 일치 | `public:` | 확정 오류 0 |
+
+**결과: 확정 오류 0건, 수정 0건.** 0082–0084에서 수정할 것은 없었다.
+
+확인 방법 (모두 소스 대조, 실행 아님):
+- include: 27개 전부 해결. 검색 루트는 `iokit/`, `libkern/`, `pexpert/`, `osfmk/`, `bsd/`와 `EXTERNAL_HEADERS/`다 (`makedefs/MakeInc.def:884-893`의 INCFLAGS). `<libkern/libkern.h>`는 `bsd/libkern/libkern.h`로 해결되며, 같은 include를 쓰는 상위 파일이 있다 (`iokit/Kernel/IONVRAMV3Handler.cpp`). COMPONENT_IMPORT_LIST가 bsd를 포함한다 (`makedefs/MakeInc.def:57`).
+- 심볼: 드라이버가 선언하지 않은 식별자 중 XNU 이름 30개를 헤더에서 찾았다. `kIODirectionInOut`은 `IOMemoryDescriptor.h:65`, `SInt32`는 `libkern/libkern/OSTypes.h:68`, `page_size`는 `osfmk/mach/vm_param.h:681`, `printf`는 `bsd/libkern/libkern.h:172`과 `osfmk/kern/misc_protos.h:173`에 있다. 로컬 이름 29개는 XNU 매크로와 충돌하지 않는다. 드라이버 클래스 이름 3개도 다른 곳에서 정의되지 않는다.
+- 시그니처: 헤더 선언과 `.cpp` 정의를 타입만 비교했다 (파라미터 이름은 무시). 불일치 0. XNU 호출은 `mapDeviceMemoryWithIndex(unsigned int, IOOptionBits = 0)`, `getVirtualAddress(void)`, `getLength(void)`, `getPhysicalAddress(void)` (`IOMemoryDescriptor.h:713`에서 `__LP64__` 가드 밖), `withOptions(IOOptionBits, vm_size_t, vm_offset_t = 1)`, `IODelay(unsigned)`, `PE_parse_boot_argn(const char *, void *, int)` 등과 맞는다.
+- 접근성: 호출하는 XNU 멤버 함수 12개 (`mapDeviceMemoryWithIndex`, `registerService`, `probe`, `start`, `stop`, `init`, `free`, `getName`, `getVirtualAddress`, `getLength`, `getPhysicalAddress`, `withOptions`) 전부 `public:` 아래에 있다. 호출 79건 (29+24+26)이 멤버, 정적 헬퍼, XNU 이름 중 하나로 해결된다.
+- 매크로 충돌: 0. IO80211/IOAudio 참조: 코드에 0 (주석에만 있다).
+- 선례 (SWEET 컴파일 파일 기준): `SweetSurface.cpp`가 `page_size`와 `NULL`을 쓴다. `SweetBattery.cpp`, `SweetCPU.cpp`, `SweetFramebuffer.cpp`가 `uint64_t`/`int64_t`를 쓴다. `SweetCPU.cpp`가 `#if defined(SWEET)` 가드를 쓴다.
+- `SWEET` 매크로: `pexpert/pexpert/arm64/SWEET.h:18`에서 `#define SWEET 1`. `board_config.h`가 `ARM64_BOARD_CONFIG_SWEET`일 때 이것을 포함하므로, 가드는 CI의 `MACHINE_CONFIG=SWEET` 빌드에서 참이다.
+- `IOKIT_ENABLE_SHARED_PTR`은 `bsd/sweet_hfs/core/hfs_iokit.cpp`에서만 정의된다. 그 TU 안에서만 유효하므로 `withOptions`는 `T*`를 돌려준다.
+
+**한계 (정적 대조가 못 잡는 것):** 실제 플래그로 전처리하지 않았다. 조건부 include는 무시하고 존재 여부로만 판단했다. SDK 플랫폼 헤더 (`sdk-kernel-platform`)는 보지 않았다. 템플릿, 오버로드 해석, 암시적 변환의 세부는 검사하지 않았다. 경고는 `BUILD_WERROR=0`이라 실패가 아니다. **실제 컴파일 검증은 첫 CI run에서만 가능하다.**
+
+## 첫 CI run 후 xnu-cc.py 활성화 절차
+
+`tools/xnu-cc.py`는 수정하지 않았다. 아래는 확인 결과와 **제안**이다.
+
+확인된 사실:
+- 환경변수 오버라이드 없음: `CLANG`은 `~/swift/usr/bin/clang`으로 하드코딩 (`tools/xnu-cc.py:25`). `CI_DXB`도 하드코딩 (`:23`). 환경변수는 `XNU_CC_OBJDIR`, `XNU_CC_EXTRA`, `XNU_CC_POST`만 읽는다 (`:94`, `:99`, `:112`).
+- `--help` 없음: `main()`이 `sys.argv[2]`를 직접 읽는다 (`:123`). 인자가 부족하면 IndexError.
+- 필터 의미: `FILTER`는 전체 CI 경로에 대한 부분 문자열 매칭이다 (`:146`). 새 소스는 같은 CI 로그의 다른 IOKit C++ 명령에서 플래그를 빌려 온다 (`template_for`).
+- 포크 이름: `CI_DXB`가 로그 경로와 맞아야 한다. 이름을 바꾸는 것 말고는 로그 쪽을 바꿀 방법이 없다.
+
+**제안 (적용하지 않음, 사용자 승인 필요):**
+1. `tools/xnu-cc.py:25`: `CLANG = os.environ.get('XNU_CC_CLANG', os.path.expanduser('~/swift/usr/bin/clang'))`
+2. `tools/xnu-cc.py:23`: `CI_DXB = os.environ.get('XNU_CC_CI_DXB', '/Users/runner/work/ios-sweet/ios-sweet/dxb')`
+3. `tools/xnu-cc.py:123` 앞: `if len(sys.argv) < 3 or sys.argv[1] in ('-h', '--help'): print(__doc__); sys.exit(0)`
+
+환경변수 방식 (1, 2)이면 도구 수정 없이 재현할 수 있다. 제안 3은 `--help`만 해결한다.
+
+활성화 순서 (첫 CI run 성공 후):
+1. 아티팩트를 받는다: `xnu-build-log` (`build.log`)와 `xnu-buildtree` (`buildtree.tgz`).
+2. 빌드 트리를 푼다: `mkdir -p $D/bt && tar xzf $D/buildtree.tgz -C $D/bt`.
+3. 스위프트 clang이 있는지 확인한다 (`ls ~/swift/usr/bin/clang`). 없으면 4단계 전에 결정한다 (설치, 또는 제안 1 적용).
+4. 실행한다:
+   `python3 tools/xnu-cc.py $D/build.log $D/bt iokit/Kernel/arm/SweetGPU.cpp iokit/Kernel/arm/SweetWifi.cpp iokit/Kernel/arm/SweetWcd9375Audio.cpp --per-file`
+5. 결과를 읽는다. stderr의 `N files, build dirs: [...]`가 나오고, 마지막에 `k of N files failed`가 나온다. `per-file`은 실패 파일과 첫 `error:` 줄 두 개를 보여준다.
+6. 실패 메시지별 원인:
+   - `no compile commands matched`: 포크 이름 (`CI_DXB`), 필터 경로 (`xnu/` 기준 상대 경로여야 함), 또는 CI 로그에 iokit 명령이 없다.
+   - `no build dir for component ...`: 빌드 트리 풀기가 불완전하다 (`build/xnu.obj`의 `meta_features.h` 확인).
+   - `error:` 줄: 실제 컴파일 오류다. 0082–0084 오류면 시그니처와 include부터 본다. 이 문서의 정적 대조 결과와 대조한다.
