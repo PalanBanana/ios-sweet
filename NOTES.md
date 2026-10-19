@@ -9,6 +9,7 @@
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
 - **GPU는 설계상 비활성 (세션 6, 2026-10-19):** `sweetgpu=1`로 게이트를 열어도 `loadZapFirmware`가 항상 실패하므로 레지스터 쓰기가 일어나지 않는다. zap 블롭 로더가 생길 때까지 GPU는 inert다. `sweetgpu=1`로 부팅했는데 GPU가 동작하지 않는 것은 정상이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다. 운영 규칙은 `sweetgpu=1`만 쓰는 것이다.
+- **세션 7 (2026-10-19): 로컬 검증 결과.** 전제 조건 7개 중 6개 충족 (`ci-validate/v1` = `d61ef3c`, origin push DISABLED, `xnu-8796.141.3` 태그, 패치 체인 84/84, 체크 17/17, 두 도구 존재). 미충족은 `tools/xnu-cc.py --help`뿐이다. `tools/xnu-cc.py`는 `--help`를 지원하지 않는다 (`sys.argv[2]`에서 IndexError). 사용법은 모듈 설명문에 있다. 0082–0084 로컬 컴파일: **미검증.** 입력 부재 (CI 로그와 `xnu-buildtree`), `~/swift/usr/bin/clang` 없음, xnu 빌드 디렉터리는 macOS `xcrun`에 의존한다 (`makedefs/MakeInc.cmd:108`). QEMU 스모크: **미검증.** `qemu-system-aarch64` 없음, 커널 없음 (CI `xnu-kernel`). `tools/mkadt.py --qemu`는 로컬에서 동작한다 (4164바이트, `/product` 노드 없음 경고). 결과와 조치는 `CI-PRECHECK.md`. 운영 규칙 유지: 게이트는 `sweetgpu=1`이 표준이고, `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다.
 
 드라이버별 상태:
 

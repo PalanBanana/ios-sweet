@@ -79,12 +79,14 @@
 | 2026-10-19 | 다음 작업 | **최초 CI 컴파일 검증을 먼저** | 8커밋 unpushed. 0082–0084 미컴파일 |
 | 2026-10-19 | 검증 브랜치 | `ci-validate/v1`. **포크에만 push, main 금지** | `origin`은 업스트림이다. 세션 5에서 push URL을 DISABLED로 설정 |
 | 2026-10-19 (세션 5) | QRTR/SoundWire | **deferred 유지** (재확인) | 세션 5 지시. 착수하지 않음 |
+| 2026-10-19 (세션 7) | 로컬 컴파일 (`xnu-cc.py`)과 QEMU 스모크 | **미검증 (입력 부재)** | CI 로그와 `xnu-buildtree`, 스위프트 clang, `qemu-system-aarch64`, 커널이 이 머신에 없다. 우회하지 않는다. 첫 CI run 후 재시도 (`CI-PRECHECK.md` 항목 3, 4) |
 
 참고: 원 요청의 날짜 자리표시(`2024-XX-XX`)는 실제 날짜 2026-10-19로 적었다.
 
 ## 5. 다음 세션 후보 (우선순위)
 
 - **P0:** CI 컴파일 검증 성공. `ci-validate/v1`을 포크에서 실행하고 로그에서 `Skipping patch` 0건을 확인한다. 절차는 `CI-TRIGGER.md`.
+  - 로컬 컴파일과 QEMU는 첫 CI run 이후로 연기한다 (입력 부재). 결정 필요: 스위프트 clang 설치 여부 (`xnu-cc.py`), `qemu-system-arm` 설치 여부 (사용자 승인 필요).
 - **P0 후속 (세션 5 완료):** 게이트 값 검사 (`21b42d0`), SWEET 가드 (`723c65b`), 패치 skip 검사 (`66ea9a5`). 남은 것: 0081 빌드 확인 (CI 로그).
 - **P1:** SSD 마운트 후 GPU 하드웨어 bring-up (펌웨어, DT 값, GBIF slice id).
 - **P2:** QRTR 프로젝트 착수 여부 — 사용자 결정.
