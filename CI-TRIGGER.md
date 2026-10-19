@@ -27,7 +27,7 @@
 | 최근 기록 | run `39117078444` (0061, NOTES.md:69). 정확한 날짜는 NOTES에 없음 | `NOTES.md:69` |
 | 워크플로우 최종 수정 | 2026-10-17 (`e4ddc76`) | `git log -- .github/workflows/xnu.yml` |
 | 마지막 실행 시각 | 이 머신에는 `gh`가 없어 조회하지 않았다. `gh run list`로 확인 | — |
-| 산출물 | `xnu-kernel` (커널 바이너리 + `SHA256SUMS`), `xnu-buildtree` (7일 보관, 단일 파일 재컴파일용) | `upload-artifact` |
+| 산출물 | `xnu-kernel` (커널 + `SHA256SUMS`)은 모든 앞 단계가 성공했을 때만 업로드 (`if: success()`). `xnu-build-log` (빌드 로그, 14일)와 `xnu-buildtree` (7일)는 실패해도 업로드 |
 
 ## 2. 패치가 적용되는 방식 (성공 판정 기준)
 
