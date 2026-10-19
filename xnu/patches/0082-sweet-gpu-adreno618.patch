@@ -1,13 +1,14 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,80 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
 + * Values come from sweet.dts (GPU node, lines 17748-18197; cited in SweetGPU.cpp)
-+ * and from Mesa a6xx.xml and Linux a6xx_gpu.c. start() maps the four register
-+ * windows. With boot-arg sweetgpu=1 it also reads the speed bin from qfprom and
-+ * writes RBBM registers (reset, interrupt mask, SECVID). No zap is loaded. The
++ * and from Mesa a6xx.xml and Linux a6xx_gpu.c. start() maps the GPU window
++ * only. With boot-arg sweetgpu=1 it also maps cx_dbgc, cx_misc and qfprom,
++ * reads the speed bin from qfprom, and writes RBBM and CP registers (reset,
++ * interrupt mask, SECVID, ring base). No zap is loaded. The
 + * DT zap node is not a child of the GPU node, so Linux takes its -ENODEV path
 + * for this DT, and this driver does the same.
 + *
