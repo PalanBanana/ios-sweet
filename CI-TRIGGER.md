@@ -93,12 +93,14 @@ gh run view <RUN_ID> -R <USER>/ios-sweet --log-failed > ~/ios-sweet-ci/run-<RUN_
 
 ```sh
 F=~/ios-sweet-ci/run-<RUN_ID>.txt
-grep "SWEET_PATCH_SUMMARY" $F   # 기대: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 stage_scripts=3/3
+grep "SWEET_PATCH_SUMMARY" $F   # 기대: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3
 grep "SWEET_PATCH_FAILURE" $F   # 실패 시 어떤 패치인지
 grep -n "error:" $F | head -50  # 컴파일 오류 (있다면)
 ```
 
 `Skipping patch`에 `0NNN-`가 하나라도 나오면, 그 패치가 실제로 빠진 채 빌드된 것이다. 이 경우 성공으로 치지 않는다.
+
+로컬 검증: `sh tools/test-check-patch-log.sh` 는 합성 로그 17개 케이스를 돌린다 (통과, 17/17). 실제 CI 로그로는 아직 검증되지 않았다.
 
 ## 4. 예상 실패 지점 (정적 검토. 컴파일 아님)
 
@@ -139,7 +141,7 @@ grep -n "error:" $F | head -50  # 컴파일 오류 (있다면)
 ## 6. 로그 판독 체크리스트
 
 1. `SWEET_PATCH_SUMMARY: result=PASS`가 있다. FAIL이면 바로 아래 `SWEET_PATCH_FAILURE` 줄이 원인이다.
-2. `applied=88`, `skipped=4`, `baseline_skipped=4`, `failed=0`, `stage_scripts=3/3`.
+2. `applied=88`, `skipped=4`, `baseline_skipped=4`, `failed=0`, `expected_applied=88`, `stage_scripts=3/3`.
 3. `skipped`의 4개는 blacktop 이름뿐이다 (TrustCache, iobuffermemd_monterey, skywalk_sonoma, syntax_checker_sonoma).
 4. `error:` 줄이 없고 `make install`이 성공했다.
 5. 아티팩트 `xnu-kernel`에 커널 바이너리와 `SHA256SUMS`가 있다.
