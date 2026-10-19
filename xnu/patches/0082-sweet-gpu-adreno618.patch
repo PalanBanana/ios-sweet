@@ -1,18 +1,19 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,79 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
-+ * Status: skeleton. start() maps the GPU MMIO block and performs no
-+ * register access. The boot-arg gate sweetgpu=1 opens the power-up path, but
-+ * loadZapFirmware always fails, so no register write happens and the GPU
-+ * stays inert until a zap blob loader exists. Register offsets and the
-+ * CP_RB_CNTL default are checked against Mesa a6xx.xml and msm_gpu.h. Items
-+ * still open for hardware bring-up (GBIF LLCC slice, NO_UPDATE choice, frame
-+ * submission) are marked
-+ * 미확정 in SweetGPU.cpp. A frame submission path needs a command-stream
-+ * design (see submitFrame).
++ * Values come from sweet.dts (GPU node, lines 17748-18197; cited in SweetGPU.cpp)
++ * and from Mesa a6xx.xml and Linux a6xx_gpu.c. start() maps the four register
++ * windows. With boot-arg sweetgpu=1 it also reads the speed bin from qfprom and
++ * writes RBBM registers (reset, interrupt mask, SECVID). No zap is loaded. The
++ * DT zap node is not a child of the GPU node, so Linux takes its -ENODEV path
++ * for this DT, and this driver does the same.
++ *
++ * 미확정: clocks and GDSC rails, GBIF/LLCC, SMMU, CP start, 64-bit address
++ * mode, frame submission. No IOKit personality matches this class, so start()
++ * runs only if the class is instantiated explicitly.
 + */
 +#ifndef _SWEET_GPU_ADRENO618_H_
 +#define _SWEET_GPU_ADRENO618_H_
@@ -21,24 +22,47 @@
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <IOKit/IOMemoryDescriptor.h>
 +
++/* One pwrlevel bin of sweet.dts gpu-pwrlevel-bins (table in SweetGPU.cpp). */
++struct SweetGpuPwrBin {
++	uint32_t speedBin;      /* qcom,speed-bin */
++	uint32_t initLevel;     /* qcom,initial-pwrlevel */
++	uint32_t caLevel;       /* qcom,ca-target-pwrlevel */
++	uint32_t nLevels;       /* entries in freqHz, DT order, fastest first */
++	uint32_t freqHz[9];     /* Hz; 0 is the off level */
++};
++
 +class MsmGpuAdreno618 : public IOService {
 +	OSDeclareDefaultStructors(MsmGpuAdreno618);
 +
 +private:
-+	IOMemoryMap                 *fMmio;        /* GPU register block */
-+	volatile uint32_t           *fRegs;
-+	IOBufferMemoryDescriptor    *fRingBuf;     /* 64 KiB command ring */
++	IOMemoryMap                 *fMmio;         /* reg window 0: GPU block */
++	IOMemoryMap                 *fCxDbgc;       /* reg window 1: cx_dbgc */
++	IOMemoryMap                 *fCxMisc;       /* reg window 2: cx_misc */
++	IOMemoryMap                 *fQfprom;       /* reg window 3: qfprom (fuses) */
++	volatile uint32_t           *fRegs;         /* GPU block, dword indices */
++	volatile uint8_t            *fQfpromRegs;   /* qfprom, byte offsets */
++	IOBufferMemoryDescriptor    *fRingBuf;      /* 32 KiB ring, physically contiguous */
++	const SweetGpuPwrBin        *fPwrBin;       /* table selected by speed bin */
++	uint32_t                    fSpeedBin;
 +	uint32_t                    fRingWptr;
 +	uint32_t                    fFence;
++	uint32_t                    fIrqCount;
++	uint32_t                    fLastIntStatus;
 +	bool                        fReady;
++	bool                        fIrqRegistered;
 +
-+	uint32_t readReg(uint32_t off);
-+	void     writeReg(uint32_t off, uint32_t val);
++	uint32_t readReg(uint32_t idx);
++	void     writeReg(uint32_t idx, uint32_t val);
++	uint32_t readFuse(uint32_t byteOff);
++	bool     mapWindow(IOService *provider, uint32_t index, uint64_t minBytes,
++	    IOMemoryMap **map, const char *name);
++	void     teardown(void);
 +
 +	IOReturn powerUpSequence(void);
 +	IOReturn initRingbuffer(void);
 +	IOReturn loadZapFirmware(void);
 +	bool     waitIdle(uint32_t timeoutUs);
++	static void handleInterrupt(OSObject *target, void *refCon, IOService *nub, int source);
 +
 +public:
 +	virtual bool     init(OSDictionary *dict = NULL) override;
@@ -58,14 +82,14 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,419 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
-+ * Offsets: Mesa a6xx.xml / adreno_common.xml (dword indices), checked in
-+ * the P0 pass. Gated by boot-arg sweetgpu=1: without it the driver maps the
-+ * block and performs no register access. Items still open for hardware
-+ * bring-up are marked 미확정 with the reason.
++ * Source of each value: sweet.dts GPU node (qcom,kgsl-3d0@5000000, lines
++ * 17748-18197), Mesa a6xx.xml and adreno_common.xml (register offsets as dword
++ * indices), and Linux a6xx_gpu.c where noted. Every register access sits behind
++ * boot-arg sweetgpu=1. Without it, start() maps the GPU block and nothing else.
 + */
 +#include <pexpert/arm64/board_config.h>
 +
@@ -82,10 +106,10 @@
 +OSDefineMetaClassAndStructors(MsmGpuAdreno618, IOService)
 +
 +/*
-+ * Boot-arg gate: only the exact value 1 opens it. The buffer is int64_t and
-+ * max_len is 8, because argnumcpy stores (int32_t)val at max_len 4, so
-+ * sweetgpu=4294967297 would read back as 1 (bootargs.c:362). A bare name, or any value that is not
-+ * the number 1, keeps the gate closed.
++ * Boot-arg gate: only the exact value 1 opens it. The buffer is int64_t with
++ * max_len 8. At max_len 4, argnumcpy keeps only the low 32 bits
++ * (pexpert/gen/bootargs.c:379), so sweetgpu=4294967297 would read back as 1. A bare name or any other value
++ * keeps the gate closed.
 + */
 +static bool
 +sweetGpuGateOpen(void)
@@ -95,32 +119,92 @@
 +}
 +
 +/*
-+ * Dword indices, as in Mesa src/freedreno/registers/adreno/a6xx.xml and
-+ * adreno_common.xml. Byte offset = index * 4. Kernel: adreno_gpu.h:766
-+ * (gpu->mmio + (addr << 2)). Entries marked (64) are reg64 (lo at index,
-+ * hi at index+1).
++ * Reg windows: sweet.dts:17752 reg = <0x5000000 0x40000 0x5061000 0x800
++ * 0x509e000 0x1000 0x780000 0x6300>, named at 17753. Mapping goes by index.
++ * The sizes are the minimum that each mapping must cover.
++ */
++static const uint64_t kGpuRegBytes = 0x40000;   /* 0: kgsl_3d0_reg_memory */
++static const uint64_t kCxDbgcBytes = 0x800;     /* 1: cx_dbgc */
++static const uint64_t kCxMiscBytes = 0x1000;    /* 2: cx_misc */
++static const uint64_t kQfpromBytes = 0x6300;    /* 3: qfprom_memory */
++
++/* sweet.dts:17754 interrupts = <0 0x12c 4>: SPI 300, level-high. Source 0 of the provider. */
++static const int kGpuIrqSource = 0;
++
++/* sweet.dts:17757 qcom,chipid = <0x6010800>. 미확정: not read, Mesa has no chip-ID register. */
++static const uint32_t kChipIdDt = 0x06010800;
++
++/* sweet.dts:17783 qcom,gpu-speed-bin = <0x41a0 0x1fe00000 0x15>: byte offset, mask, shift in qfprom. */
++static const uint32_t kSpeedBinOff = 0x41a0;
++static const uint32_t kSpeedBinMask = 0x1fe00000;
++static const uint32_t kSpeedBinShift = 21;
++
++/* MSM_GPU_RINGBUFFER_SZ = SZ_32K (msm_gpu.h:306). The control value below encodes that size. */
++static const uint32_t kRingBytes = 32 * 1024;
++static const uint32_t kRbCntlDefault = 0x20C;   /* MSM_GPU_RB_CNTL_DEFAULT, msm_gpu.h:309-311 */
++
++/* sweet.dts:18182 qcom,gpu-pwrlevel@7 = "\bX;": a string, not a frequency. */
++static const uint32_t kPwrSentinel = 0xFFFFFFFFu;
++
++/*
++ * Frequency tables from sweet.dts gpu-pwrlevel-bins (starts at line 17816), in Hz
++ * exactly as the DT gives them. Level 0 is the fastest. The bin for a speed bin is
++ * selected at start(); the clock is not programmed (미확정).
++ */
++static const SweetGpuPwrBin kPwrBins[] = {
++	/* sweet.dts:17821 */
++	{ 0x00, 7, 5, 9, { 825000000, 800000000, 650000000, 565000000, 430000000,
++	    355000000, 267000000, 180000000, 0 } },
++	/* sweet.dts:17901 */
++	{ 0xac, 7, 5, 9, { 825000000, 800000000, 650000000, 565000000, 430000000,
++	    355000000, 267000000, 180000000, 0 } },
++	/* sweet.dts:17981 */
++	{ 0x92, 6, 4, 8, { 700000000, 650000000, 565000000, 430000000, 355000000,
++	    267000000, 180000000, 0 } },
++	/* sweet.dts:18053 */
++	{ 0x80, 5, 3, 7, { 610000000, 565000000, 430000000, 355000000, 267000000,
++	    180000000, 0 } },
++	/* sweet.dts:18117: level 7 is kPwrSentinel and initLevel is 7 (미확정) */
++	{ 0xa7, 7, 4, 9, { 800000000, 650000000, 565000000, 430000000, 355000000,
++	    267000000, 180000000, kPwrSentinel, 0 } },
++};
++
++/*
++ * Register offsets as dword indices (byte offset = index * 4), the convention of
++ * Mesa and Linux (adreno_gpu.h:766). Entries marked (64) are reg64: lo at the
++ * index, hi at index+1.
 + */
 +enum {
-+	kRbbmStatus        = 0x0210,  /* a6xx.xml:554 RBBM_STATUS */
-+	kRbbmSwResetCmd    = 0x0043,  /* a6xx.xml:806 RBBM_SW_RESET_CMD */
-+	kRbbmInt0Mask      = 0x0038,  /* a6xx.xml:801 RBBM_INT_0_MASK */
-+	kRbbmInt0Status    = 0x0201,  /* a6xx.xml:552 RBBM_INT_0_STATUS */
-+	kGbifScache0       = 0x3c01,  /* a6xx.xml:1273 GBIF_SCACHE_CNTL0 (rmw in kernel, value unconfirmed) */
-+	kGbifScache1       = 0x3c02,  /* a6xx.xml:1274 GBIF_SCACHE_CNTL1 (rmw in kernel, value unconfirmed) */
-+	kCpRbBase          = 0x0800,  /* a6xx.xml:147 CP_RB_BASE (64) */
-+	kCpRbCntl          = 0x0802,  /* a6xx.xml:148 CP_RB_CNTL */
-+	kCpRbRptrAddr     = 0x0804,  /* a6xx.xml:150 CP_RB_RPTR_ADDR (64) */
-+	kCpRbRptr          = 0x0806,  /* a6xx.xml:151 CP_RB_RPTR */
-+	kCpRbWptr          = 0x0807,  /* a6xx.xml:152 CP_RB_WPTR */
-+	kCpIntCntl         = 0x01f2,  /* adreno_common.xml:184 CP_INT_CNTL (not redefined in a6xx.xml) */
-+	kCpMeCntl          = 0x01f6,  /* adreno_common.xml:197 CP_ME_CNTL */
-+	kCpMeStatus        = 0x01f7,  /* adreno_common.xml:201 CP_ME_STATUS */
++	kRbbmStatus          = 0x0210,  /* a6xx.xml:554 RBBM_STATUS */
++	kRbbmSwResetCmd      = 0x0043,  /* a6xx.xml:806 RBBM_SW_RESET_CMD */
++	kRbbmInt0Mask        = 0x0038,  /* a6xx.xml:801 RBBM_INT_0_MASK */
++	kRbbmInt0Status      = 0x0201,  /* a6xx.xml:552 RBBM_INT_0_STATUS */
++	kRbbmSecvidTrustCntl = 0xF400,  /* a6xx.xml:775 RBBM_SECVID_TRUST_CNTL */
++	kGbifScache0         = 0x3c01,  /* a6xx.xml:1273 GBIF_SCACHE_CNTL0 (rmw in kernel, value unconfirmed) */
++	kGbifScache1         = 0x3c02,  /* a6xx.xml:1274 GBIF_SCACHE_CNTL1 (rmw in kernel, value unconfirmed) */
++	kCpRbBase            = 0x0800,  /* a6xx.xml:147 CP_RB_BASE (64) */
++	kCpRbCntl            = 0x0802,  /* a6xx.xml:148 CP_RB_CNTL */
++	kCpRbRptrAddr        = 0x0804,  /* a6xx.xml:150 CP_RB_RPTR_ADDR (64) */
++	kCpRbRptr            = 0x0806,  /* a6xx.xml:151 CP_RB_RPTR */
++	kCpRbWptr            = 0x0807,  /* a6xx.xml:152 CP_RB_WPTR */
++	kCpIntCntl           = 0x01f2,  /* adreno_common.xml:184 CP_INT_CNTL (not redefined in a6xx.xml) */
++	kCpMeCntl            = 0x01f6,  /* adreno_common.xml:197 CP_ME_CNTL */
++	kCpMeStatus          = 0x01f7,  /* adreno_common.xml:201 CP_ME_STATUS */
 +};
 +
 +/* a6xx.xml:554 RBBM_STATUS bit 0 = CP_AHB_BUSY_CX_MASTER (ignored for idle) */
 +static const uint32_t kRbbmStatusCxAhbBusy = 1u << 0;
 +
-+static const uint32_t kRingBytes = 64 * 1024;
++static const SweetGpuPwrBin *
++selectPwrBin(uint32_t speedBin)
++{
++	for (uint32_t i = 0; i < sizeof(kPwrBins) / sizeof(kPwrBins[0]); i++) {
++		if (kPwrBins[i].speedBin == speedBin) {
++			return &kPwrBins[i];
++		}
++	}
++	return NULL;
++}
 +
 +uint32_t MsmGpuAdreno618::readReg(uint32_t idx)
 +{
@@ -132,17 +216,54 @@
 +	fRegs[idx] = val;
 +}
 +
++uint32_t MsmGpuAdreno618::readFuse(uint32_t byteOff)
++{
++	/* Byte offset, as in sweet.dts. Dword indices are for the GPU block only. */
++	return *(volatile uint32_t *)(fQfpromRegs + byteOff);
++}
++
++bool MsmGpuAdreno618::mapWindow(IOService *provider, uint32_t index, uint64_t minBytes,
++    IOMemoryMap **map, const char *name)
++{
++	/* Mapping does not touch the hardware. */
++	*map = provider->mapDeviceMemoryWithIndex(index);
++	if (!*map) {
++		printf("SWEET GPU: %s (reg %u) map failed\n", name, index);
++		return false;
++	}
++	if ((*map)->getLength() < minBytes) {
++		printf("SWEET GPU: %s (reg %u) maps %llu bytes, DT says %llu\n", name, index,
++		    (unsigned long long)(*map)->getLength(), (unsigned long long)minBytes);
++		OSSafeReleaseNULL(*map);
++		return false;
++	}
++	printf("SWEET GPU: %s (reg %u) pa=%#llx va=%p len=%llu\n", name, index,
++	    (unsigned long long)(*map)->getPhysicalAddress(),
++	    (void *)(*map)->getVirtualAddress(),
++	    (unsigned long long)(*map)->getLength());
++	return true;
++}
++
 +bool MsmGpuAdreno618::init(OSDictionary *dict)
 +{
 +	if (!super::init(dict)) {
 +		return false;
 +	}
 +	fMmio = NULL;
++	fCxDbgc = NULL;
++	fCxMisc = NULL;
++	fQfprom = NULL;
 +	fRegs = NULL;
++	fQfpromRegs = NULL;
 +	fRingBuf = NULL;
++	fPwrBin = NULL;
++	fSpeedBin = 0;
 +	fRingWptr = 0;
 +	fFence = 0;
++	fIrqCount = 0;
++	fLastIntStatus = 0;
 +	fReady = false;
++	fIrqRegistered = false;
 +	return true;
 +}
 +
@@ -159,47 +280,107 @@
 +		return false;
 +	}
 +
-+	/* Map GPU MMIO (reg index 0 from the device-tree node). */
-+	fMmio = provider->mapDeviceMemoryWithIndex(0);
-+	if (!fMmio) {
-+		printf("SWEET GPU: mapDeviceMemoryWithIndex(0) failed\n");
++	/* Window 0 is mapped with or without the gate. Mapping is not a register access. */
++	if (!mapWindow(provider, 0, kGpuRegBytes, &fMmio, "gpu")) {
 +		return false;
 +	}
 +	fRegs = (volatile uint32_t *)fMmio->getVirtualAddress();
-+	printf("SWEET GPU: mmio va=%p len=%llu\n", fRegs,
-+	    (unsigned long long)fMmio->getLength());
 +
-+	/* identity register not read: no chip-id offset confirmed (미확정) */
-+	printf("SWEET GPU: mmio mapped (identity not read: 미확정)\n");
-+
-+	/* VALUE checked: only sweetgpu=1 enables unverified MMIO writes */
-+	/* use sweetgpu=1 for clarity; -sweetgpu and sweetgpu=0x1 also open */
 +	if (!sweetGpuGateOpen()) {
 +		printf("SWEET GPU: sweetgpu=1 not set; leaving hardware untouched\n");
 +		registerService();
 +		return true;
 +	}
 +
-+	/* Zap loads before any register write: no firmware, no MMIO writes. */
-+	if (loadZapFirmware() != kIOReturnSuccess) {
-+		printf("SWEET GPU: zap firmware unavailable; GPU not started\n");
-+		OSSafeReleaseNULL(fMmio);
++	/* The gate is open from here on. Windows 1-3 are mapped only now. */
++	if (!mapWindow(provider, 1, kCxDbgcBytes, &fCxDbgc, "cx_dbgc") ||
++	    !mapWindow(provider, 2, kCxMiscBytes, &fCxMisc, "cx_misc") ||
++	    !mapWindow(provider, 3, kQfpromBytes, &fQfprom, "qfprom")) {
++		teardown();
 +		return false;
 +	}
++	fQfpromRegs = (volatile uint8_t *)fQfprom->getVirtualAddress();
++
++	/* Speed bin: a read of qfprom fuses, not of the GPU block. */
++	fSpeedBin = (readFuse(kSpeedBinOff) & kSpeedBinMask) >> kSpeedBinShift;
++	fPwrBin = selectPwrBin(fSpeedBin);
++	if (!fPwrBin || fPwrBin->initLevel >= fPwrBin->nLevels ||
++	    fPwrBin->freqHz[fPwrBin->initLevel] == kPwrSentinel) {
++		printf("SWEET GPU: speed-bin %#x has no usable pwrlevel bin; not started\n", fSpeedBin);
++		teardown();
++		return false;
++	}
++	printf("SWEET GPU: speed-bin %#x -> init level %u = %u Hz, ca level %u "
++	    "(clock not programmed; DT chip-id %#x unverified)\n",
++	    fSpeedBin, fPwrBin->initLevel, fPwrBin->freqHz[fPwrBin->initLevel],
++	    fPwrBin->caLevel, kChipIdDt);
++
++	/*
++	 * Linux takes its no-zap path (a6xx_gpu.c:1515-1516) when zap init returns
++	 * -ENODEV. kIOReturnUnsupported is that result here. Any other result would
++	 * need CP_SET_SECURE_MODE, which this driver does not write, so it refuses.
++	 */
++	IOReturn zap = loadZapFirmware();
++	if (zap != kIOReturnUnsupported) {
++		printf("SWEET GPU: zap result %#x not handled; not started\n", (unsigned)zap);
++		teardown();
++		return false;
++	}
++	printf("SWEET GPU: no zap loaded; continuing on the SECVID path as Linux does for "
++	    "-ENODEV. A GPU that needs secure mode may fault here.\n");
++
 +	if (powerUpSequence() != kIOReturnSuccess) {
 +		printf("SWEET GPU: power-up failed\n");
-+		OSSafeReleaseNULL(fMmio);
++		teardown();
 +		return false;
 +	}
 +	if (initRingbuffer() != kIOReturnSuccess) {
 +		printf("SWEET GPU: ring buffer init failed\n");
-+		OSSafeReleaseNULL(fMmio);
++		teardown();
 +		return false;
 +	}
++	if (registerInterrupt(kGpuIrqSource, this, handleInterrupt) != kIOReturnSuccess) {
++		printf("SWEET GPU: interrupt registration failed\n");
++		teardown();
++		return false;
++	}
++	fIrqRegistered = true;
 +	fReady = true;
 +	printf("SWEET GPU: ready\n");
 +	registerService();
 +	return true;
++}
++
++void MsmGpuAdreno618::teardown(void)
++{
++	if (fReady) {
++		/* Mask before the windows go, so no RBBM_INT_0 source fires on released memory. */
++		writeReg(kRbbmInt0Mask, 0);
++		fReady = false;
++	}
++	if (fIrqRegistered) {
++		(void)unregisterInterrupt(kGpuIrqSource);
++		fIrqRegistered = false;
++	}
++	OSSafeReleaseNULL(fRingBuf);
++	OSSafeReleaseNULL(fQfprom);
++	OSSafeReleaseNULL(fCxMisc);
++	OSSafeReleaseNULL(fCxDbgc);
++	OSSafeReleaseNULL(fMmio);
++	fRegs = NULL;
++	fQfpromRegs = NULL;
++	fPwrBin = NULL;
++}
++
++void MsmGpuAdreno618::handleInterrupt(OSObject *target, void *refCon, IOService *nub, int source)
++{
++	(void)refCon;
++	(void)nub;
++	(void)source;
++	/* Registered only in start(), and removed in teardown() before the windows go. */
++	MsmGpuAdreno618 *self = static_cast<MsmGpuAdreno618 *>(target);
++	self->fLastIntStatus = self->readReg(kRbbmInt0Status);
++	self->fIrqCount++;
 +}
 +
 +bool MsmGpuAdreno618::waitIdle(uint32_t timeoutUs)
@@ -218,7 +399,11 @@
 +
 +IOReturn MsmGpuAdreno618::powerUpSequence(void)
 +{
-+	/* a6xx_gpu_sw_reset(): assert then deassert RBBM_SW_RESET_CMD (a6xx_gpu.c:2128-2131) */
++	/*
++	 * RBBM_SW_RESET_CMD assert, then deassert, with readback (a6xx_gpu.c:2128-2130).
++	 * 미확정: Linux runs this only in a6xx_recover, for gmu-wrapper and rgmu parts
++	 * (a6xx_gpu.c:1606-1612), not in hw_init. Kept from the first version.
++	 */
 +	writeReg(kRbbmSwResetCmd, 1);
 +	(void)readReg(kRbbmSwResetCmd);
 +	IODelay(1);
@@ -226,14 +411,23 @@
 +	(void)readReg(kRbbmSwResetCmd);
 +	IODelay(1);
 +
-+	/* 0 = all RBBM_INT_0 sources masked (a6xx_gpu.c:1849 writes 0). */
++	/*
++	 * 0 masks every RBBM_INT_0 source (a6xx_gpu.c:1849, the hang path). Linux
++	 * hw_init writes A6XX_INT_MASK here instead (a6xx_gpu.c:1436). 미확정: the
++	 * nonzero mask waits until the IRQ path is checked on hardware.
++	 */
 +	writeReg(kRbbmInt0Mask, 0);
 +
 +	/*
-+	 * Not written here: GBIF_SCACHE_CNTL0/1. The kernel computes these from a
-+	 * runtime LLCC slice id (gpu_scid, a6xx_gpu.c:1980-2050), which this
-+	 * board has not provided. 미확정 until hardware bring-up.
++	 * SECVID set once, here only (sweet.dts:17759 qcom,gpu-quirk-secvid-set-once).
++	 * 0 is the value Linux writes on the no-zap path (a6xx_gpu.c:1515-1516).
++	 * Linux warns that a wrong guess blocks this register (a6xx_gpu.c:1496-1497).
++	 * stop() never writes it again.
 +	 */
++	writeReg(kRbbmSecvidTrustCntl, 0);
++
++	/* GBIF_SCACHE_CNTL0/1 are not written: the kernel derives them from an LLCC
++	 * slice id (a6xx_gpu.c:1979-2051), which this board has not provided. 미확정. */
 +	if (!waitIdle(100000)) {
 +		printf("SWEET GPU: RBBM not idle after reset\n");
 +		return kIOReturnTimeout;
@@ -245,37 +439,37 @@
 +IOReturn MsmGpuAdreno618::loadZapFirmware(void)
 +{
 +	/*
-+	 * Not implemented. a615_zap.mbn is in the Android vendor partition, which
-+	 * this machine cannot read. A success return here would mark the GPU ready
-+	 * without firmware, so this always fails.
++	 * Not implemented: a615_zap needs SCM (PAS init, auth, reset), and this
++	 * driver has no SCM path. The DT node pil_gpu (qcom,kgsl-hyp, pas-id 0x0d,
++	 * firmware a615_zap, sweet.dts:17674-17678) has no reference from the GPU
++	 * node. Linux finds the zap only as a child named "zap-shader"
++	 * (adreno_gpu.c:49), so Linux returns -ENODEV for this DT. start() takes the
++	 * same path on kIOReturnUnsupported.
 +	 */
-+	printf("SWEET GPU: zap loader not implemented; refusing to start\n");
 +	return kIOReturnUnsupported;
 +}
 +
 +IOReturn MsmGpuAdreno618::initRingbuffer(void)
 +{
++	/* Physically contiguous: the GPU reads the ring by address, and no SMMU mapping exists here. */
 +	fRingBuf = IOBufferMemoryDescriptor::withOptions(
-+	    kIODirectionInOut | kIOMemoryKernelUserShared, kRingBytes, page_size);
++	    kIODirectionInOut | kIOMemoryPhysicallyContiguous, kRingBytes, page_size);
 +	if (!fRingBuf) {
 +		return kIOReturnNoMemory;
 +	}
 +	uint64_t ringPA = (uint64_t)fRingBuf->getPhysicalAddress();
-+	/* gpu_write64(CP_RB_BASE) at a6xx_gpu.c:1446: lo at index, hi at index+1 */
++	/* gpu_write64(CP_RB_BASE), a6xx_gpu.c:1446: lo at the index, hi at index+1 */
 +	writeReg(kCpRbBase, (uint32_t)ringPA);
 +	writeReg(kCpRbBase + 1, (uint32_t)(ringPA >> 32));
 +	/*
-+	 * MSM_GPU_RB_CNTL_DEFAULT = BUFSZ(ilog2(SZ_32K/8)=12) | BLKSZ(ilog2(32/8)=2)
-+	 *   = 0x20C  (msm_gpu.h:306-311; adreno_common.xml:138-141 field layout)
-+	 * The kernel ORs AXXX_CP_RB_CNTL_NO_UPDATE (bit 27) only when
-+	 * !hw_apriv (a6xx_gpu.c:1453-1455). That choice is 미확정 and depends on
-+	 * the GPU's apriv capability: resolve at hardware bring-up.
++	 * 0x20C is MSM_GPU_RB_CNTL_DEFAULT for a 32 KiB ring (msm_gpu.h:309-311).
++	 * NO_UPDATE (a6xx_gpu.c:1452-1456) is left out: it depends on hw_apriv, 미확정.
 +	 */
-+	writeReg(kCpRbCntl, 0x20C);
++	writeReg(kCpRbCntl, kRbCntlDefault);
 +	fRingWptr = 0;
 +	writeReg(kCpRbWptr, 0);
-+	printf("SWEET GPU: ring PA=%#llx (CP_RB_CNTL=0x20C, NO_UPDATE 미확정)\n",
-+	    (unsigned long long)ringPA);
++	printf("SWEET GPU: ring pa=%#llx bytes=%u (NO_UPDATE 미확정)\n",
++	    (unsigned long long)ringPA, kRingBytes);
 +	return kIOReturnSuccess;
 +}
 +
@@ -284,9 +478,9 @@
 +{
 +	/*
 +	 * 미확정: a frame is not a CP_MEM_TO_MEM. That packet copies dwords
-+	 * (adreno_pm4.xml:1368, DST + SRC_A addresses), so it cannot move a
-+	 * surface. Real submission needs a command stream (CP_INDIRECT_BUFFER)
-+	 * and a fence. Not implemented until that design exists.
++	 * (adreno_pm4.xml:1368, DST + SRC_A addresses), so it cannot move a surface.
++	 * Real submission needs a command stream (CP_INDIRECT_BUFFER) and a fence.
++	 * Nothing here writes a register or the ring, so this stays unsupported.
 +	 */
 +	(void)surfacePA;
 +	(void)bytes;
@@ -296,15 +490,14 @@
 +
 +void MsmGpuAdreno618::stop(IOService *provider)
 +{
-+	/* 0 masks all RBBM_INT_0 sources (a6xx_gpu.c:1849); ~0u would enable them */
-+	writeReg(kRbbmInt0Mask, 0);
++	/* Writes only happen if start() reached the ready state. */
++	teardown();
 +	super::stop(provider);
 +}
 +
 +void MsmGpuAdreno618::free(void)
 +{
-+	OSSafeReleaseNULL(fRingBuf);
-+	OSSafeReleaseNULL(fMmio);
++	teardown();
 +	super::free();
 +}
 +
