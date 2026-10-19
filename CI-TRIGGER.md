@@ -95,7 +95,7 @@ gh run view <RUN_ID> -R <USER>/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID>.txt
 gh run view <RUN_ID> -R <USER>/ios-sweet --log-failed > ~/ios-sweet-ci/run-<RUN_ID>-failed.txt
 ```
 
-성공이든 실패든 **SWEET_PATCH_SUMMARY 줄부터 확인한다.** 초록불만으로 판정하지 않는다.
+성공이든 실패든 **SWEET_PATCH_SUMMARY 줄부터 확인한다.** 초록불만으로 판정하지 않는다. 첫 run이 끝나면 `tools/post-ci-analyze.sh`로 1차 분류한다 (`CI-FAILURE-PLAYBOOK.md` §3).
 
 ```sh
 F=~/ios-sweet-ci/run-<RUN_ID>.txt

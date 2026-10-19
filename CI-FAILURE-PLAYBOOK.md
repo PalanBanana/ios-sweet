@@ -75,11 +75,32 @@ Build 단계의 마지막 100줄. `awk`의 기본 필드 분리를 쓴다. 열 �
 awk '$1=="build" && $2=="Build"' $F | tail -n 100
 ```
 
-**미검증 경고.** 열 구분이 실제로 어떤 형식인지는 아직 확인하지 않았다. `tools/xnu-cc.py:36`의 정규식은 탭과 공백을 모두 허용하도록 쓰였다 (근거 부분 있음). 첫 실행에서 아래로 확인한다.
+**합성 로그로 검증 완료, 실 CI 로그로는 미검증.** `tools/test-post-ci-analyze.sh`가 탭과 공백 두 형식에서 Build 단계 97줄을 정확히 뽑는다. 이전 필터 `-F'\t' '$2=="Build"'`는 공백 형식에서 0줄이었고, job 열을 보지 않아 다른 job의 `Build` 단계도 뽑았다 (98 대 97). 제한: 단계 이름이 `Build `(공백 뒤)로 시작하는 다른 단계가 생기면 이 필터가 그것도 뽑는다. 지금 워크플로우에는 그런 단계가 없다. 첫 실행에서 형식을 아래로 확인한다.
 
 ```sh
 head -n 3 $F | cat -A      # 탭이면 ^I가 보인다
 ```
+
+### 첫 판정: post-ci-analyze.sh
+
+첫 run이 끝나면 로그를 받고 바로 분류한다. 이 도구는 `gh`를 실행하지 않고 로그 파일만 읽는다.
+
+```sh
+gh run view $RUN $R --log > ~/ios-sweet-ci/run-$RUN.txt
+~/projects/ios-sweet/tools/post-ci-analyze.sh ~/ios-sweet-ci/run-$RUN.txt
+```
+
+첫 줄이 `POST_CI_VERDICT: <판정> (exit N)`이다. 판정별 뜻은 다음과 같다.
+
+| 판정 | 종료 코드 | 뜻 | 다음 단계 |
+|---|---|---|---|
+| `PASS` | 0 | 패치 적용과 빌드가 모두 정상이다 | 아티팩트 `xnu-kernel`과 `SHA256SUMS`를 확인한 뒤 다음 단계 |
+| `FAIL` | 1 | 패치가 기대와 다르게 적용되었다 | `SWEET_PATCH_FAILURE` 줄을 본다 → 시나리오 A |
+| `COMPILE_ERROR` | 1 | 패치는 적용됐지만 컴파일러나 make가 실패했다 | 분석 결과의 `file:line` → 시나리오 B |
+| `BUILD_ABORTED_BEFORE_VERIFY` | 2 | 패치 루프 전에 끝났다 (SUMMARY가 없거나, 빌드 로그 부재, 스테이지 중단) | 시나리오 C, F, E |
+| `UNKNOWN` | 3 | 요약 줄의 불변식이 깨졌거나 판정할 근거가 없다 | 로그 원본을 직접 본다 |
+
+분석은 `ANALYSIS:` 아래에 요약 줄, 실패 줄 (최대 20), 컴파일 진단, `##[error]` 줄을 보여준다. Build 단계의 마지막 100줄은 `RUN.log.build-tail.txt`에 쓴다. 아티팩트 (`xnu-build-log`, `xnu-kernel`)는 로그에 없으므로 따로 확인한다.
 
 ## 4. 다음 세션에 첨부할 것 (최소)
 

@@ -92,12 +92,43 @@ python3 tools/xnu-cc.py $D/build.log $D/bt \
 - 필터 의미: `FILTER`는 전체 CI 경로에 대한 부분 문자열 매칭이다 (`:146`). 새 소스는 같은 CI 로그의 다른 IOKit C++ 명령에서 플래그를 빌려 온다 (`template_for`).
 - 포크 이름: `CI_DXB`가 로그 경로와 맞아야 한다. 이름을 바꾸는 것 말고는 로그 쪽을 바꿀 방법이 없다.
 
-**제안 (적용하지 않음, 사용자 승인 필요):**
-1. `tools/xnu-cc.py:25`: `CLANG = os.environ.get('XNU_CC_CLANG', os.path.expanduser('~/swift/usr/bin/clang'))`
-2. `tools/xnu-cc.py:23`: `CI_DXB = os.environ.get('XNU_CC_CI_DXB', '/Users/runner/work/ios-sweet/ios-sweet/dxb')`
-3. `tools/xnu-cc.py:123` 앞: `if len(sys.argv) < 3 or sys.argv[1] in ('-h', '--help'): print(__doc__); sys.exit(0)`
+**제안 (적용하지 않음, 사용자 승인 필요).** 세 제안은 모두 `tools/xnu-cc.py`를 고치므로 적용하면 도구 수정이 한 번 필요하다. 적용하지 않은 이유는 입력 부재다. 첫 CI run의 아티팩트가 없으면 고친 도구를 돌릴 입력이 없다. 최소 diff는 아래와 같다. `ast.parse`로 구문만 확인했고 실행하지는 않았다.
 
-환경변수 방식 (1, 2)이면 도구 수정 없이 재현할 수 있다. 제안 3은 `--help`만 해결한다.
+**1. CLANG 경로를 환경변수로 (`tools/xnu-cc.py:25`)**
+
+```diff
+-CLANG = os.path.expanduser('~/swift/usr/bin/clang')
++CLANG = os.environ.get('XNU_CC_CLANG', os.path.expanduser('~/swift/usr/bin/clang'))
+```
+
+**2. CI_DXB를 환경변수로 (`tools/xnu-cc.py:23`)**
+
+```diff
+-CI_DXB = '/Users/runner/work/ios-sweet/ios-sweet/dxb'
++CI_DXB = os.environ.get('XNU_CC_CI_DXB', '/Users/runner/work/ios-sweet/ios-sweet/dxb')
+```
+
+**3. `--help` (`tools/xnu-cc.py:123` 앞)**
+
+```diff
+ def main():
++    if len(sys.argv) < 3 or sys.argv[1] in ('-h', '--help'):
++        print(__doc__)
++        sys.exit(0)
+     log, bt = sys.argv[1], os.path.abspath(sys.argv[2])
+```
+
+제안 2는 포크 이름이 `ios-sweet`가 아닐 때 쓴다. CI 로그의 경로는 `/Users/runner/work/<포크 이름>/<포크 이름>/dxb`이고, `CI_DXB`가 그 접두사와 맞아야 한다. 환경변수로 맞추면 상수를 다시 고치지 않아도 된다. 포크 이름을 `ios-sweet`로 두는 것이 가장 단순하다.
+
+**스위프트 clang 설치 결정 체크리스트** (첫 CI run 후, 사용자가 결정):
+- [ ] 로그에 iokit C++ 컴파일 줄이 있다: `grep -c "/xnu/iokit/.*\.cpp" build.log`
+- [ ] `xnu-buildtree`가 풀리고 `build/xnu.obj`에 `meta_features.h`가 있다
+- [ ] swiftlang clang의 출처와 체크섬을 확인했다. 설치 전에 공식 배포처를 확인한다
+- [ ] 설치 또는 대체에 사용자가 승인했다
+- [ ] 제안 1을 적용할지 결정했다 (적용하면 `CLANG`을 명령 밖에서 지정할 수 있다)
+- [ ] 실행 결과 stderr에 `N files, build dirs: [...]`가 나오고, 마지막에 `k of N files failed`가 나온다
+
+**qemu 설치 결정 체크리스트:** 커널 아티팩트 (`xnu-kernel`)가 받아졌다, `tools/mkadt.py --qemu`가 로컬에서 동작한다 (세션 7 확인), `qemu-system-arm` 설치에 승인했다.
 
 활성화 순서 (첫 CI run 성공 후):
 1. 아티팩트를 받는다: `xnu-build-log` (`build.log`)와 `xnu-buildtree` (`buildtree.tgz`).
@@ -110,3 +141,16 @@ python3 tools/xnu-cc.py $D/build.log $D/bt \
    - `no compile commands matched`: 포크 이름 (`CI_DXB`), 필터 경로 (`xnu/` 기준 상대 경로여야 함), 또는 CI 로그에 iokit 명령이 없다.
    - `no build dir for component ...`: 빌드 트리 풀기가 불완전하다 (`build/xnu.obj`의 `meta_features.h` 확인).
    - `error:` 줄: 실제 컴파일 오류다. 0082–0084 오류면 시그니처와 include부터 본다. 이 문서의 정적 대조 결과와 대조한다.
+
+## 세션 9: 린트와 판정 하네스
+
+- **actionlint v1.7.12** (`~/bin/actionlint`). 릴리스의 `checksums.txt`로 SHA-256을 검증했다 (`8aca8db9…`). 워크플로우 결과: **error 0**, info 1. info는 `Deps` 단계의 `SC2012` (`ls -d /Applications/Xcode*.app`)다. 표시용 명령이라 고치지 않았다.
+- **shellcheck v0.11.0** (`~/bin/shellcheck`). 이 릴리스에는 체크섬 자산이 없다. 아카이브 SHA-256 `8c3be12b…`을 기록했고, 내용물이 `shellcheck`, `LICENSE`, `README`뿐임을 확인했다. 정적 링크된 ELF다.
+  - 워크플로우의 인라인 `run:` 블록 7개: 오류 0, 경고 0, 노트 1 (`Deps`의 SC2012, actionlint와 같다).
+  - `tools/check-patch-log.sh`: 오류 0. 경고 2 (SC2010, `ls | grep`로 패치 이름 필터). 노트 2 (SC2086, 의도된 단어 분리: `printf '%s\n' $LIST`는 따옴표로 묶으면 목록이 한 줄로 합쳐져 `comm` 결과가 틀린다). **CI 판정에 영향이 없어서 고치지 않았다.**
+  - `tools/test-check-patch-log.sh`: 경고 2 (SC2010). 고치지 않았다.
+  - `tools/post-ci-analyze.sh`: 0건. `tools/test-post-ci-analyze.sh`: SC2028 1건 (`echo`의 백슬래시 이스케이프)을 `printf`로 고쳤다.
+- **논리 검토에서 찾은 것:** 읽을 수 없는 로그는 판정은 FAIL로 맞았지만, 우연이었다. 빈 카운터가 `integer expected` 셸 오류를 내고 요약에 `stage_scripts=/3`이 찍혔다. 명시적 `-r` 검사를 추가했고 회귀 케이스를 넣었다 (테스트 18/18).
+- **awk 합성 검증** (`tools/test-post-ci-analyze.sh`): 탭 형식과 공백 형식 두 가지 모두에서 Build 단계 97줄을 정확히 뽑는다. 옛 필터 `-F'\t' '$2=="Build"'`는 공백 형식에서 0줄이고, 탭 형식에서도 다른 job의 `Build` 단계 1줄을 더 뽑았다 (98 대 97). job 열을 보지 않았기 때문이다. 실 CI 로그로는 아직 검증하지 않았다.
+- **post-ci-analyze.sh**: 합성 fixture 5개 (PASS, FAIL, BUILD_ABORTED_BEFORE_VERIFY, COMPILE_ERROR, UNKNOWN)가 기대 판정과 종료 코드를 낸다. fixture는 실제 체커 출력에서 만들었다.
+- **xnu-cc.py 제안 3건**: 구문 검증만 했다 (`ast.parse`, 실행 안 함). 적용하지 않았다.
