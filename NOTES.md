@@ -1,5 +1,14 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+### HANDOFF 2026-10-19 (drivers 0082-0084, UNVERIFIED)
+
+- Added `xnu/patches/0082-sweet-gpu-adreno618.patch` (MsmGpuAdreno618), `0083-sweet-wifi-wcn3990.patch` (Wcn3990Controller), `0084-sweet-audio-wcd9375.patch` (SweetWcd9375Audio). Requested names 0070-0072 were already taken, so these use 0082-0084.
+- All three are IOService skeletons. Each maps MMIO and logs. Real power-up, ring, rail and firmware steps run only with boot-args `sweetgpu=1`, `sweetwifi=1`, `sweetaudio=1`. Firmware blobs (zap, WLAN) come from boot-args and are not provided yet.
+- Register offsets and packet formats are marked VERIFY and are NOT checked against a6xx.xml.h, the wcn3990 bring-up notes or wcd937x.c.
+- Not compiled. This machine has no xnu-8796 tree and no aarch64 cross toolchain on PATH. Only `git apply --stat` was run. Hunk line numbers in `files.arm64` are estimates.
+- Not pushed (push to main triggers the macOS CI). Build with the xnu workflow when ready.
+- Not done: ADT nodes for gpu/wifi/audio (mkadt.py), KernelConfigTables personalities, IO80211/IOAudio bridges.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<

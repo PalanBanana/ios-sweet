@@ -1,0 +1,291 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetGPU.h
+@@ -0,0 +1,53 @@
++/*
++ * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
++ *
++ * Status: skeleton. start() maps the GPU MMIO block and reads identity
++ * registers only. Power-up, ring buffer and zap loading run only when the
++ * boot-arg sweetgpu=1 is set, because every register offset below that is
++ * marked VERIFY has not been checked against a6xx.xml.h yet, and a bad
++ * write on the phone hangs it.
++ */
++#ifndef _SWEET_GPU_ADRENO618_H_
++#define _SWEET_GPU_ADRENO618_H_
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/IOMemoryDescriptor.h>
++
++class MsmGpuAdreno618 : public IOService {
++	OSDeclareDefaultStructors(MsmGpuAdreno618);
++
++private:
++	IOMemoryMap                 *fMmio;        /* GPU register block */
++	volatile uint32_t           *fRegs;
++	IOBufferMemoryDescriptor    *fRingBuf;     /* 64 KiB command ring */
++	IOBufferMemoryDescriptor    *fZapBuf;      /* 64 KiB zap firmware */
++	uint32_t                    fRingWptr;
++	uint32_t                    fFence;
++	bool                        fReady;
++
++	uint32_t readReg(uint32_t off);
++	void     writeReg(uint32_t off, uint32_t val);
++
++	IOReturn powerUpSequence(void);
++	IOReturn initRingbuffer(void);
++	IOReturn loadZapFirmware(void);
++	bool     waitIdle(uint32_t timeoutUs);
++
++public:
++	virtual bool     init(OSDictionary *dict = NULL) override;
++	virtual IOService *probe(IOService *provider, SInt32 *score) override;
++	virtual bool     start(IOService *provider) override;
++	virtual void     stop(IOService *provider) override;
++	virtual void     free(void) override;
++
++	/*
++	 * Submit one frame: the surface lives at a physical address of
++	 * `bytes` length. Queues a CP_MEM_TO_MEM packet and bumps WPTR.
++	 * Called from the framebuffer path (SweetFramebuffer.cpp) once the
++	 * GPU path is enabled.
++	 */
++	IOReturn submitFrame(uint64_t surfacePA, uint32_t bytes, uint32_t *fenceOut);
++};
++
++#endif /* _SWEET_GPU_ADRENO618_H_ */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -0,0 +1,227 @@
++/*
++ * SWEET: Adreno 618 bring-up (see SweetGPU.h).
++ *
++ * Register offsets marked VERIFY come from the brief, not from a6xx.xml.h,
++ * and are not checked. Gated by boot-arg sweetgpu=1: without it the driver
++ * maps the block and logs the identity register only.
++ */
++#include <IOKit/IOLib.h>
++#include <IOKit/IOService.h>
++#include <IOKit/IOMapper.h>
++#include <libkern/libkern.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#include "SweetGPU.h"
++
++#define super IOService
++OSDefineMetaClassAndStructors(MsmGpuAdreno618, IOService)
++
++/* VERIFY: all offsets below against a6xx.xml.h (SM7150 / Adreno 618 = a618) */
++enum {
++	kRbbmStatus        = 0x0210,  /* VERIFY */
++	kRbbmSwReset       = 0x0018,  /* VERIFY */
++	kRbbmInt0Mask      = 0x0300,  /* VERIFY */
++	kGbifScache0       = 0x3b00,  /* VERIFY */
++	kGbifScache1       = 0x3b04,  /* VERIFY */
++	kCpRbBase          = 0x0800,  /* VERIFY */
++	kCpRbCntl          = 0x0802,  /* VERIFY */
++	kCpRbRptrAddr      = 0x0804,  /* VERIFY */
++	kCpRbWptr          = 0x0805,  /* VERIFY */
++	kCpIntCntl         = 0x0a00,  /* VERIFY */
++	kCpMeCntl          = 0x0a08,  /* VERIFY */
++	kCpMeStatus        = 0x0a0c,  /* VERIFY */
++	kGpuIdentity       = 0x0000,  /* VERIFY: chip-id register */
++};
++
++static const uint32_t kRingBytes = 64 * 1024;
++static const uint32_t kZapBytes  = 64 * 1024;
++
++uint32_t MsmGpuAdreno618::readReg(uint32_t off)
++{
++	return fRegs[off / 4];
++}
++
++void MsmGpuAdreno618::writeReg(uint32_t off, uint32_t val)
++{
++	fRegs[off / 4] = val;
++}
++
++bool MsmGpuAdreno618::init(OSDictionary *dict)
++{
++	if (!super::init(dict)) {
++		return false;
++	}
++	fMmio = NULL;
++	fRegs = NULL;
++	fRingBuf = NULL;
++	fZapBuf = NULL;
++	fRingWptr = 0;
++	fFence = 0;
++	fReady = false;
++	return true;
++}
++
++IOService *MsmGpuAdreno618::probe(IOService *provider, SInt32 *score)
++{
++	IOService *ret = super::probe(provider, score);
++	printf("SWEET GPU: probe provider=%s\n", provider ? provider->getName() : "?");
++	return ret;
++}
++
++bool MsmGpuAdreno618::start(IOService *provider)
++{
++	if (!super::start(provider)) {
++		return false;
++	}
++
++	/* Map GPU MMIO (reg index 0 from the device-tree node). */
++	fMmio = provider->mapDeviceMemoryWithIndex(0);
++	if (!fMmio) {
++		printf("SWEET GPU: mapDeviceMemoryWithIndex(0) failed\n");
++		return false;
++	}
++	fRegs = (volatile uint32_t *)fMmio->getVirtualAddress();
++	printf("SWEET GPU: mmio va=%p len=%llu\n", fRegs,
++	    (unsigned long long)fMmio->getLength());
++
++	uint32_t id = readReg(kGpuIdentity);
++	printf("SWEET GPU: identity %#x (VERIFY)\n", id);
++
++	if (!PE_parse_boot_argn("sweetgpu", NULL, 0)) {
++		printf("SWEET GPU: sweetgpu=1 not set; leaving hardware untouched\n");
++		registerService();
++		return true;
++	}
++
++	if (powerUpSequence() != kIOReturnSuccess) {
++		printf("SWEET GPU: power-up failed\n");
++		OSSafeReleaseNULL(fMmio);
++		return false;
++	}
++	if (loadZapFirmware() != kIOReturnSuccess) {
++		printf("SWEET GPU: zap firmware missing; GPU not ready\n");
++		return false;
++	}
++	if (initRingbuffer() != kIOReturnSuccess) {
++		printf("SWEET GPU: ring buffer init failed\n");
++		return false;
++	}
++	fReady = true;
++	printf("SWEET GPU: ready\n");
++	registerService();
++	return true;
++}
++
++bool MsmGpuAdreno618::waitIdle(uint32_t timeoutUs)
++{
++	uint64_t deadline = mach_absolute_time() +
++	    (uint64_t)timeoutUs * 24;  /* ~24 MHz timebase, VERIFY */
++	while (mach_absolute_time() < deadline) {
++		if (!(readReg(kRbbmStatus) & (1u << 31))) {  /* VERIFY: GPU busy bit */
++			return true;
++		}
++		IODelay(10);
++	}
++	return false;
++}
++
++IOReturn MsmGpuAdreno618::powerUpSequence(void)
++{
++	/* Order follows msm adreno a6xx_gpu_hw_init (VERIFY each step). */
++	writeReg(kRbbmSwReset, 1);
++	IODelay(100);
++	writeReg(kRbbmSwReset, 0);
++
++	writeReg(kGbifScache0, 0x1);  /* VERIFY */
++	writeReg(kGbifScache1, 0x1);  /* VERIFY */
++
++	writeReg(kRbbmInt0Mask, 0);   /* mask everything until the ring exists */
++
++	if (!waitIdle(100000)) {
++		printf("SWEET GPU: RBBM not idle after reset\n");
++		return kIOReturnTimeout;
++	}
++	printf("SWEET GPU: power-up done, RBBM_STATUS=%#x\n", readReg(kRbbmStatus));
++	return kIOReturnSuccess;
++}
++
++IOReturn MsmGpuAdreno618::loadZapFirmware(void)
++{
++	/*
++	 * The zap shader (a615_zap.mbn) is in the Android vendor partition.
++	 * The shim is expected to place it at the reserved DRAM range that the
++	 * ADT node /arm-io/gpu-zap describes (not yet in mkadt.py). Until that
++	 * exists this returns an error, so the GPU never runs unsigned code.
++	 */
++	fZapBuf = IOBufferMemoryDescriptor::withOptions(
++	    kIODirectionInOut | kIOMemoryKernelUserShared, kZapBytes, page_size);
++	if (!fZapBuf) {
++		return kIOReturnNoMemory;
++	}
++	if (!PE_parse_boot_argn("sweetgpuzap", NULL, 0)) {
++		printf("SWEET GPU: zap blob not provided (sweetgpuzap unset)\n");
++		OSSafeReleaseNULL(fZapBuf);
++		return kIOReturnNotFound;
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn MsmGpuAdreno618::initRingbuffer(void)
++{
++	fRingBuf = IOBufferMemoryDescriptor::withOptions(
++	    kIODirectionInOut | kIOMemoryKernelUserShared, kRingBytes, page_size);
++	if (!fRingBuf) {
++		return kIOReturnNoMemory;
++	}
++	uint64_t ringPA = (uint64_t)fRingBuf->getPhysicalAddress();
++	/* VERIFY: CP_RB_BASE takes a 32-bit address; ring must be below 4 GiB. */
++	if (ringPA >> 32) {
++		printf("SWEET GPU: ring above 4 GiB (%#llx)\n", (unsigned long long)ringPA);
++		return kIOReturnNoResources;
++	}
++	writeReg(kCpRbBase, (uint32_t)ringPA);
++	writeReg(kCpRbCntl, 0x0000000f);  /* VERIFY: ring size encoding */
++	fRingWptr = 0;
++	writeReg(kCpRbWptr, 0);
++	writeReg(kCpIntCntl, 0);
++	printf("SWEET GPU: ring PA=%#x\n", (uint32_t)ringPA);
++	return kIOReturnSuccess;
++}
++
++IOReturn MsmGpuAdreno618::submitFrame(uint64_t surfacePA, uint32_t bytes,
++    uint32_t *fenceOut)
++{
++	if (!fReady) {
++		return kIOReturnNotReady;
++	}
++	/* Packet layout is VERIFY (CP_MEM_TO_MEM). Writes go through the ring. */
++	volatile uint32_t *ring = (volatile uint32_t *)fRingBuf->getBytesNoCopy();
++	uint32_t slots = kRingBytes / 4;
++	if (fRingWptr + 4 > slots) {
++		fRingWptr = 0;
++	}
++	ring[fRingWptr++] = 0x40000000u | 3;   /* VERIFY: type-7 header */
++	ring[fRingWptr++] = (uint32_t)surfacePA;
++	ring[fRingWptr++] = (uint32_t)(surfacePA >> 32);
++	ring[fRingWptr++] = bytes;
++	fFence++;
++	writeReg(kCpRbWptr, fRingWptr);
++	if (fenceOut) {
++		*fenceOut = fFence;
++	}
++	return kIOReturnSuccess;
++}
++
++void MsmGpuAdreno618::stop(IOService *provider)
++{
++	writeReg(kRbbmInt0Mask, ~0u);
++	super::stop(provider);
++}
++
++void MsmGpuAdreno618::free(void)
++{
++	OSSafeReleaseNULL(fRingBuf);
++	OSSafeReleaseNULL(fZapBuf);
++	OSSafeReleaseNULL(fMmio);
++	super::free();
++}
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -22,1 +22,2 @@
+ iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp             optional iokitcpp
++iokit/Kernel/arm/SweetGPU.cpp                                 optional iokitcpp
