@@ -204,3 +204,12 @@ gh run view <RUN_ID> -R PalanBanana/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID
 - `git push`에 remote를 생략하면 origin으로 간다. origin은 `DISABLED`다. `fork`를 명시한다.
 - 로컬 `ci-validate/v1` (`fd539b9`)은 push 대상이 아니다.
 - 판정: `POST_CI_VERDICT: PASS` (exit 0)이면 PASS. 그 외는 `CI-FAILURE-PLAYBOOK.md`를 따른다.
+
+## 세션 15: CI PASS 확정 (run 39350775805)
+
+- 실행 `39350775805`, 빌드 커밋 `ad20b73` (로그의 checkout 줄 `+ad20b73...`). 잡 `build` 7m14s. 아티팩트: `xnu-kernel`, `xnu-buildtree`, `xnu-build-log`.
+- 분석: `./tools/post-ci-analyze.sh ~/ios-sweet-ci/run-39350775805.txt` → `POST_CI_VERDICT: PASS (exit 0)`.
+- `error:` 11줄은 baseline skip 4개의 `git apply` 메시지다 (컴파일 오류 아님). `SweetGPU.cpp:137` `-Wcast-align` 경고가 하나 있다 (`readFuse`).
+- 이 머신 확인 (세션 15): personality 0 (`xnu/` 전체, `.plist` 포함), ADT GPU 0, 체인 84/84, 체크 18/18.
+- 다음 코드 변경을 올릴 때는 위 세션 14 절의 명령을 쓴다. push 대상은 새 커밋을 포함한 `HEAD`다.
+- `sweetgpu=1` 하드웨어 테스트는 금지 유지다. 컴파일 PASS는 실행 안전성을 뜻하지 않는다 (세션 13 체크리스트 그대로).

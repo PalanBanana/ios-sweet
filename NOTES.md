@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 15 (2026-10-20): CI PASS 확정 (run `39350775805`).** 빌드 커밋 `ad20b73` (0082 재작성 `f6bdb2b`·`a42cd8b` 포함)이 컴파일과 링크를 통과했다. 아티팩트 3종. 코드 변경 없음. 승인 대기: 펌웨어 조사, TSB 3개, ADDR_MODE 12개. 상세: '세션 15' 절.
 - **세션 14 (2026-10-20): CI 미실행 (Case N).** fork `ci-validate/v1`은 여전히 `fd539b9`이고 새 run 로그가 없다. 코드 변경 없음. NO_UPDATE의 의미를 정정했다 (하드웨어 RPTR 섀도를 끄는 비트다). TSB/ADDR_MODE 적용 초안은 승인 전까지 적용하지 않는다. 상세: 아래 '세션 14' 절.
 - **세션 13 (2026-10-20): CI 준비와 연구.** 코드 변경 없음. push는 `git push fork HEAD:ci-validate/v1`이다 (로컬 `ci-validate/v1`은 `fd539b9`라서 `git push fork ci-validate/v1`은 아무것도 보내지 않는다). CI는 수동 `workflow_dispatch`다. NO_UPDATE 불일치 (0082 `0x20C`, Linux `0x0800020C`)와 TSB/ADDR_MODE 표는 세션 14 입력이다. 상세: 아래 '세션 13' 절.
 - **세션 12 (2026-10-19): 0082 GPU 재작성 (`f6bdb2b`).** DT 값으로 다시 썼다. 확정 값, 브리프 정정, 미확정 목록은 아래 '세션 12' 절.
@@ -24,6 +25,36 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 15 (2026-10-20): CI PASS 확정 (run 39350775805), 승인 대기 (코드 변경 없음)
+
+**결과.** 실행 `39350775805` (`workflow_dispatch`, ref `ci-validate/v1`), 잡 `build` 7m14s, 결과 ✓. 빌드한 커밋은 `ad20b73`이다 (로그의 checkout 줄: `fetch ... +ad20b73...`). `ad20b73`에는 0082 재작성 `f6bdb2b`와 헤더 주석 `a42cd8b`가 들어 있다. **세션 12의 0082 재작성이 처음으로 컴파일과 링크를 통과했다.** 아티팩트 `xnu-kernel`, `xnu-buildtree`, `xnu-build-log`가 업로드됐다. `xnu-kernel`은 성공 시에만 올라가므로 커널 링크까지 성공했다.
+
+**로그 근거** (`~/ios-sweet-ci/run-39350775805.txt`, 원본 30 MB, build-tail 보관).
+- `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`.
+- `tools/post-ci-analyze.sh`: `POST_CI_VERDICT: PASS (exit 0)`. compile_errors 0, step_errors 0.
+- 로그의 `error:` 11줄은 모두 baseline skip 4개의 `git apply` 메시지다 (TrustCache 4줄, iobuffermemd_monterey, skywalk_sonoma, syntax_checker_sonoma). 컴파일 오류가 아니다 (`path:line:col: error:` 0건).
+- baseline skip 4개 (재현성): TrustCache.patch, iobuffermemd_monterey.patch, skywalk_sonoma.patch, syntax_checker_sonoma.patch.
+- `SweetGPU` 줄 5개: 오브젝트 `SweetGPU.cpo` 빌드 (38282), clang++ 명령 (38283), 헤더 포함 문맥 (38970, 경고 원인은 기존 `OSMetaClass.h:1149`), `SweetGPU.cpp:137` 경고 (39402), 링크 입력 목록 (67766).
+- `.cpo`는 XNU C++ 오브젝트 접미사다 (38282). 세션 15 요청문의 `.cpo` 의문은 해소.
+
+**경고 (오류 아님).** `SweetGPU.cpp:137:10 [-Wcast-align]`: `readFuse`의 `*(volatile uint32_t *)(fQfpromRegs + byteOff)`. `SweetGPU.cpp`에서 나온 진단은 이것 하나뿐이다. `BUILD_WERROR=0`이라 통과했다.
+
+**세션 13 API 표와의 관계.** 세션 13 표의 9개 항목을 쓰는 코드가 이 컴파일에서 오류 없이 통과했다. 시그니처 검사와 모순되지 않는다. 컴파일은 실행 동작을 검증하지 않는다. `sweetgpu=1`은 여전히 금지다.
+
+**gh 조회 (읽기 전용).** `gh run view 39350775805`: 잡 `build` 7m14s (요청문의 7분 17초는 이 값으로 정정), 아티팩트 3종. 주석: Node.js 20 지원 종료 경고 (`actions/checkout@v4`, `actions/upload-artifact@v4`가 Node 24로 강제 실행됨). 실패 원인은 아니다. 워크플로 유지보수 때 확인한다.
+
+**세션 15 전제 스캔.** HEAD `ad20b73`, 작업 트리 clean, origin push `DISABLED`, 체인 84/84, 체크 18/18, personality 0 (`xnu/` 전체, `.plist` 포함), `mkadt.py` GPU 0, stage 재생성이 HEAD 패치와 바이트 단위로 같다 (편집 워크플로 확인).
+
+**발견 (승인 항목 아님).**
+- `readFuse`의 `-Wcast-align`은 `fQfpromRegs`를 `volatile uint32_t *`로 두고 `byteOff / 4`로 인덱싱하면 없어진다. 코드 변경이므로 승인이 필요하다.
+- 쓰기 삽입 위치 (stage 기준): `powerUpSequence()`는 315행부터. SW 리셋의 두 번째 `IODelay(1)`은 327행. INT 마스크 쓰기는 334행. SECVID 쓰기는 342행. `writeReg`는 129행. TSB/ADDR_MODE는 327행 다음, INT 마스크 주석 이전에 넣는다.
+
+**승인 대기 (코드 변경 금지, 세션 중단).**
+1. 펌웨어 조사: 폰에서 read-only 검색 (`a630_sqe.fw`, `a630_gmu.bin`). `has_whereami` 판정 근거를 얻는다.
+2. TSB 3개 write 추가 (named enum, Mesa 오프셋 주석).
+3. ADDR_MODE 12개 write 추가 (named enum, Mesa와 Linux 라인 주석).
+4. NO_UPDATE: 구현하지 않는다. SQE 결과 후 세션 16에서 결정한다.
 
 ### 세션 14 (2026-10-20): CI 미실행 (Case N), 결정 문서 (코드 변경 없음)
 
