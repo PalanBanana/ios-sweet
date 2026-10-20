@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 16 (분석, 2026-10-20): shim SCM 경로, Linux hw_init 매핑, personality 준비 (코드 변경 없음).** shim에는 SMC(PSCI)만 있고 SCM/PAS 호출은 없다 (경우 2). hw_init 쓰기 약 140개 중 0082가 구현한 것은 19개다. personality는 게이트가 닫혀 있으면 레지스터에 접근하지 않는다. CI `run-39359712049`는 `dec211a`(580e857 포함)에서 PASS, SweetGPU 경고 0. 상세: '세션 16 (분석)' 절.
 - **세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`).** TSB 3개 레지스터와 ADDR_MODE 12개 쓰기를 추가했다 (현재 빌드에서 실행 경로 없음). `readFuse`의 `-Wcast-align`은 warning-only로 정리했다. 체인 84/84, 체크 18/18. 승인 1 (펌웨어 조사)은 폰이 USB에 없어 실행하지 못했다. 승인 4 (NO_UPDATE)는 보류. 상세: '세션 16' 절.
 - **세션 15 (2026-10-20): CI PASS 확정 (run `39350775805`).** 빌드 커밋 `ad20b73` (0082 재작성 `f6bdb2b`·`a42cd8b` 포함)이 컴파일과 링크를 통과했다. 아티팩트 3종. 코드 변경 없음. 승인 대기: 펌웨어 조사, TSB 3개, ADDR_MODE 12개. 상세: '세션 15' 절.
 - **세션 14 (2026-10-20): CI 미실행 (Case N).** fork `ci-validate/v1`은 여전히 `fd539b9`이고 새 run 로그가 없다. 코드 변경 없음. NO_UPDATE의 의미를 정정했다 (하드웨어 RPTR 섀도를 끄는 비트다). TSB/ADDR_MODE 적용 초안은 승인 전까지 적용하지 않는다. 상세: 아래 '세션 14' 절.
@@ -26,6 +27,82 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 16 (분석, 2026-10-20): shim SCM 경로, Linux hw_init 매핑, personality 준비 (코드 변경 없음)
+
+**전제.** HEAD `dec211a`, 작업 트리 clean, `git apply` 84/84, personality 0 (`xnu/`의 `.plist`), ADT GPU 0 (`tools/mkadt.py`), origin push `DISABLED`. 참조: `~/refs/linux` `c03c1a1`, `~/refs/mesa` `f28352d`, `~/refs/xnu` `1b191cb`.
+
+**CI 확인 (로컬 로그만, gh 조회 없음).** `~/ios-sweet-ci/run-39359712049.txt`: `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`. 분석기 `POST_CI_VERDICT: PASS (exit 0)`, compile_errors 0, step_errors 0. 빌드한 커밋은 `dec211a`다 (checkout 줄 `+dec211a…`). `dec211a`에는 `580e857`(TSB/ADDR_MODE, readFuse)이 들어 있다. `SweetGPU.cpp` 진단은 0이다 (세션 15의 `-Wcast-align`이 사라짐). 정정: 요청문의 "580e857 컴파일 확정"은 정확히는 `dec211a` 빌드 PASS다.
+
+**A. shim SCM 판정: 경우 2 (SCM 없음, SMC 콘듀잇은 있음).**
+- `shim/shim.c:77-83`: `smc(fn, a1, a2, a3)` 헬퍼 (`smc #0`). 사용처는 PSCI/SMCCC뿐이다: 상수 37–46, `SYSTEM_RESET` (111), `CPU_OFF` (183), `CPU_ON` ×7 (193), `FEATURES` (347), 버전 조회 (429). SCM 호출 (PAS_INIT_IMAGE, MEM_SETUP, AUTH_AND_RESET, set_gpu_smmu_aperture)과 `zap`/`a615` 참조는 없다 (`grep -rniE "scm|pas_|pil_|zap|a615" shim/`은 주석 1줄뿐이다).
+- XNU로 가는 정상 경로: `shim_main` (373) → `loader_boot(dtb)` (382) → 성공하면 `xnu_entry` 호출 (`shim/loader.c:145`). 점프 전에 SMC 호출이 없다. PSCI 시험 경로 (`stage = "psci"`, 428)는 loader가 실패할 때만 실행된다.
+- XNU 포트: `xnu/patches/0065-sweet-smp-psci.patch`의 `sweet_psci_cpu_on`이 `smc #0`으로 PSCI `CPU_ON`을 보낸다. 포트 패치 전체에 SCM 경로는 없다 (`scm`: 0082–0084를 뺀 파일 0건).
+- 실기 기록 (NOTES 687–688, 이번 세션에서 재확인하지 않음): PSCI 1.1 응답, `CPU_ON` 보조 코어 7개 성공. SMC 콘듀잇은 실기에서 동작했다. QEMU virt는 `hvc`라서 이 경로를 검증하지 못한다 (NOTES 661).
+- 결론: zap을 로드하는 주체가 어디에도 없다. 0082의 `-ENODEV` 경로는 "지금 zap을 로드하지 않는다"는 현재 상태를 그대로 반영한다. zap을 로드하려면 (a) shim에 PAS 시퀀스를 추가하거나 (`loader_boot` 앞), (b) XNU 포트에 SCM 브리지를 추가해야 한다. 둘 다 새 코드다 (승인 필요).
+- zap 메모리 (`phone-dump/firmware/a615_zap/a615_zap.mdt`, ELF 직접 파싱): 프로그램 헤더 3개. `[0]` 헤더 사본 148 B (`.b00`). `[1]` type 2 해시 세그먼트 (`.b01` 6712 B, 0x6000, 로드 대상 아님. 일반 규칙이며 `mdt_loader.c`는 refs에 없어 미확인). `[2]` PT_LOAD paddr `0x5000`, memsz `0x7c0` (1984 B, `.b02`). 4 KiB 정렬 4096 B가 DT 예약 `gpu_region@97715000` `0x2000` (8192 B, `removed-dma-pool`, `no-map`, `sweet.dts:18541`) 안에 들어간다. 예약 크기는 충분하다. 다만 XNU 쪽 `memory-map`은 빈 자리표시자다 (`tools/mkadt.py:114`). XNU가 이 영역을 쓰지 않도록 하는 장치가 없다.
+- SMMU aperture SCM: `adreno_gpu.c:671-673` (`adreno_hw_init`, 6xx Gen1): `qcom_scm_set_gpu_smmu_aperture(0)`. zap과 별개로 SCM이 필요하다. 정의는 refs에 없다 (미확인).
+
+**B. Linux a6xx_hw_init 매핑 (a618 경로, 카탈로그 sm7150 항목).**
+- 범위: `a6xx_gpu.c:1179-1547` (369줄). 시작 1188–1192는 GMU OOB set이다. GPU 노드 compatible은 `qcom,kgsl-3d0`이고 `qcom,adreno-gmu-wrapper`가 아니므로 전체 GMU 경로다. 끝 1522–1546은 OOB clear다.
+- 쓰기 문장은 정적 집계다 (a618에 해당하는 분기만). 0082 열: ✅ 구현 (`580e857` 포함), ◐ 부분 구현, ❌ 미구현.
+
+| Linux 라인 | 내용 | Mesa dword | 0082 | 외부 의존 |
+|---|---|---|---|---|
+| 1188–1192 | GMU OOB set (GPU_SET) | GMU | ❌ | GMU 펌웨어, GMU 창 |
+| 1202–1207 | GBIF_HALT=0, RBBM_GBIF_HALT=0 (각각 읽기 포함). 주석 1195: GX가 collapse되지 않았을 수 있다 | 0x3C45, 0x0016 | ❌ | GX 전원 |
+| 1210 | RBBM_SECVID_TSB_CNTL=0 | 0xF803 | ✅ | 없음 |
+| 1220–1221 | TSB_TRUSTED_BASE (reg64)=0, TSB_TRUSTED_SIZE=0 | 0xF800, 0xF802 | ✅ | 없음 |
+| 1225–1236 | ADDR_MODE 12개 = 1 (`!adreno_is_a7xx`, 1223) | 0x0842 … 0xF810 | ✅ | 없음 |
+| 1240 → 641–721 | a615_hwcg 63개 + RBBM_CLOCK_CNTL (on/off) | 0x000AE (CNTL) | ❌ | 없음 (표는 카탈로그 65–130) |
+| 1257 | RBBM_VBIF_CLIENT_QOS_CNTL=3 | 0x00010 | ❌ | 없음 |
+| 1267 | RBBM_PERFCTR_GPU_BUSY_MASKED=0xFFFFFFFF | 0x050B | ❌ | 없음 |
+| 1286–1296 | UCHE_GMEM_RANGE_MIN/MAX (reg64), UCHE_FILTER_CNTL=0x804, UCHE_CACHE_WAYS=4 | 0x0E0B, 0x0E0D, 0x0E18, 0x0E17 | ❌ | 없음 (gmem 512K) |
+| 1306–1320 | CP_ROQ_THRESHOLDS_2=0x010000C0, _1=0x8040362C, CP_MEM_POOL_SIZE=128 | 0x08C2, 0x08C1, 0x08C3 | ❌ | 없음 |
+| 1326 | PC_DBG_ECO_CNTL = prim_fifo_threshold (0x00180000) | 0x9E00 | ❌ | 없음 |
+| 1330–1342 | CP_AHB_CNTL=1, RBBM_PERFCTR_CNTL=1, CP_PERFCTR_CP_SEL(0) | 0x098D, 0x0500, (확인 필요) | ❌ | 없음 |
+| 1344 → 748–807 | UBWC NC_MODE ×5 (RB, TPL1, SP, UCHE_MODE, RBBM_NC_MODE) | 0x8E08, 0xB604, 0xAE02, 0x0E01, 0x0534 | ❌ | DT ubwc 값 (ubwc-mode 2, hbb 14, min-acc 0x20). `qcom_ubwc_*` 헬퍼는 refs에 없다 |
+| 1351–1361 | RBBM_INTERFACE_HANG_INT_CNTL=(1<<30)\|0x1FFFFF, UCHE_CLIENT_PF=BIT(7)\|1 | 0x0001F, 0x0E19 | ❌ | 없음 |
+| 1384 → 723–746 | CP_PROTECT 32개 + CP_PROTECT_CNTL | 0x084F (CNTL), 범위 레지스터 (확인 필요) | ❌ | 없음 (카탈로그 508–541) |
+| 1436–1437 | RBBM_INT_0_MASK = A6XX_INT_MASK | 0x0038 | ◐ (0082는 0 기록) | IRQ 경로 |
+| 1439 → adreno_gpu.c:663 | adreno_hw_init: 6xx Gen1 SMMU aperture (SCM), 링 포인터 초기화 | — | ❌ | SCM |
+| 1443 | CP_SQE_INSTR_BASE (reg64) | 0x0816 | ❌ | SQE (`a630_sqe.fw`) |
+| 1446 | CP_RB_BASE (reg64) | 0x0800 | ✅ | 없음 |
+| 1452–1456 | CP_RB_CNTL: hw_apriv=0이면 DEFAULT\|NO_UPDATE = 0x0800020C | 0x0802 | ◐ (0x20C, NO_UPDATE 없음) | SQE, has_whereami |
+| 1459–1462 | CP_RB_RPTR_ADDR (reg64), shadow_bo가 있을 때만 | 0x0804 | ❌ | hw_apriv / has_whereami |
+| 1472 | a6xx_preempt_hw_init | — | 해당 없음 (링 1개면 조기 반환) | — |
+| 1481 | CP_SQE_CNTL = 1 | 0x0808 | ❌ | SQE |
+| 1488 | a6xx_cp_init (ME_INIT) | — | ❌ | CP 기동 |
+| 1499–1516 | zap (SCM/PAS). -ENODEV이면 RBBM_SECVID_TRUST_CNTL=0 | 0xF400 | ◐ (SECVID만) | SCM |
+| 1522–1546 | GMU OOB clear (GPU_SET), legacy 부팅 slumber, perf OOB | GMU | ❌ | GMU |
+| 밖: 2138, 2166 | a6xx_gmu_pm_resume / a6xx_pm_resume → a6xx_llc_activate (1969–2050): GBIF_SCACHE_CNTL0/1 | 0x3C01, 0x3C02 | ❌ | LLCC slice id, GMU 부팅 |
+| 밖: DT | GDSC, 레귤레이터, 클록 (vddcx 0x1C5, vdd 0x24E, 클록 5개), gpucc 0x5090000/0x9000 | — | ❌ | XNU 제어 경로 없음 |
+| 밖: IOMMU | SMMU 컨텍스트 뱅크 (adreno-smmu, `arm,smmu-kgsl@5040000`, sweet.dts:10589) | — | ❌ | SMMU 드라이버 |
+
+- 0082가 어디까지 왔나: hw_init 쓰기 문장 약 140개 (정적 집계: 단독 39 + HWCG 64 + protect 약 33 + UBWC 5, 13% 구현) 중 19개다. TSB 3문장 (베이스는 lo/hi 두 번), ADDR_MODE 12, SECVID 1, INT 마스크 1, CP_RB_BASE 1, CP_RB_CNTL 1. 뒤의 두 개는 값이 Linux와 다르다 (INT 마스크 0 대 A6XX_INT_MASK, CP_RB_CNTL에 NO_UPDATE 없음). 나머지는 GMU, SQE, SCM, 전원 의존 단계와 테이블 (HWCG 63, protect 32, UBWC 5)이다.
+- 전원 가정: 1195 주석 "in case GX domain was not collapsed"는 hw_init이 GX가 꺼졌을 수 있다고 가정한다는 뜻이다. GMU OOB와 GDSC 없이 레지스터에 접근하면 버스 폴트가 날 수 있다 (세션 12 안전 메모 그대로).
+- 브리프 B-2 기대치 정정: GBIF 캐시 (`GBIF_SCACHE`)는 hw_init이 아니라 `a6xx_pm_resume` (2166)과 `a6xx_gmu_pm_resume` (2138) 경로의 `a6xx_llc_activate` (1969–2050)다. UBWC는 hw_init 안이다 (1344). SMMU는 hw_init에 레지스터 쓰기가 없다 (SCM aperture 호출 1개뿐이고, 컨텍스트 뱅크는 IOMMU 드라이버가 맡는다). NO_UPDATE는 SQE뿐 아니라 `hw_apriv`와 `has_whereami` (`a6xx_gpu.c:1014-1026`)에도 의존한다.
+
+**C. personality / ADT GPU 준비 상태 (설계만).**
+- 선례 (0018 SweetCPU): 개인화 문자열 `IOClass = SweetCPU`, `IOProviderClass = IOPlatformDevice`, `IONameMatch = 'qcom,kryo470'` (`0018…patch:185-187`). mkadt는 `cpu` 노드에 `compatible = qcom,kryo470`을 넣는다 (`tools/mkadt.py:131`). 플랫폼은 ADT 루트를 `createNubs(IODTFindMatchingEntries(root, kIODTExclusive, excludeList()))`로 nub화한다 (0016).
+- 현재: ADT에 GPU 노드가 없고 personality도 없다. 따라서 nub가 없다.
+- 필요한 것: (1) 개인화 문자열 (`IOClass = MsmGpuAdreno618`, `IOProviderClass = IOPlatformDevice`, `IONameMatch = 'qcom,kgsl-3d0'`). 새 패치이며 승인이 필요하다. (2) ADT GPU 노드 (`compatible = qcom,kgsl-3d0`, `qcom,kgsl-3d`; `reg` 4창, 예: 0x5000000/0x40000; `interrupts` SPI 300). `mkadt.py` 변경이며 승인이 필요하다. (3) 포트에 인터럽트 컨트롤러가 없다 (`SweetGIC`, `IOInterruptController` 0건). IRQ는 게이트가 열린 뒤에만 등록되므로 (1)–(2)의 전제가 아니다.
+- 안전성: 게이트가 닫혀 있으면 `start()`는 창 0을 매핑하고 `registerService()`만 한다. 레지스터 접근도 IRQ 등록도 없다. 따라서 **개인화 문자열 + ADT 노드 + 게이트 닫힘**은 레지스터를 건드리지 않는다. 위험은 게이트가 열린 뒤의 첫 쓰기 (`RBBM_SW_RESET_CMD`)에서 시작한다.
+- 3단계 (설계):
+  1. 준비 (코드 없음): GX GDSC 상태를 읽는 방법과 GMU 경로를 문서화한다. 선례: `0072-sweet-usb-probe.patch`는 `GCC_USB30_PRIM_GDSCR` (0x0f004, bit 31)을 읽기 전용으로 출력한다. GPU는 gpucc `0x5090000` (`sweet.dts:632`, size 0x9000) 안의 GX GDSCR 오프셋을 알아야 한다 (refs에 없음, 미확인). GMU 창 3개 (`0x506a000` 0x31000, `0xb290000` 0x10000, `0xb490000` 0x10000, `sweet.dts:18227`), GMU IRQ 2개 (SPI 304, 305), `a630_gmu.bin`, zap 결정 (SCM).
+  2. 개인화 + ADT 노드 도입: 게이트 닫힘 상태로만 부팅한다. 기대 로그: `SWEET GPU: probe provider=…`, `SWEET GPU: gpu (reg 0) pa=… va=… len=…`, `SWEET GPU: sweetgpu=1 not set; leaving hardware untouched`. 레지스터 접근이 없다는 것을 이 로그로 확인한다.
+  3. `sweetgpu=1`: 1단계가 끝나 GX가 켜져 있다는 근거가 있을 때만 허용한다. 근거가 없으면 금지다. 멈추면 전원 키를 길게 눌러 재시작한다.
+
+**D. 승인 요청 (이번 세션에서 설치하지 않음).**
+- D-1 `qemu-system-aarch64`: 로컬에 없다. `pacman -Si`로 `extra` 저장소의 11.1.2-1을 확인했다 (설치하지 않음). 설치 명령은 `sudo pacman -S qemu-system-aarch64`다. 효용: XNU 부팅 회귀 (커널 아티팩트 필요). 한계: QEMU virt는 PSCI conduit가 `hvc`라서 shim과 포트의 `smc` 경로를 검증하지 못한다 (NOTES 661). Adreno는 에뮬레이트하지 않는다. 우선순위는 이쪽이 먼저다 (커널 회귀 배제).
+- D-2 swift clang (`~/swift/usr/bin/clang`): 로컬에 없다. `/usr/bin/clang`은 시스템 LLVM이고 `xnu-cc.py`가 쓰는 경로가 아니다. 설치 전 조건: 공식 배포처 URL과 SHA-256을 먼저 확정한다 (CI-PRECHECK 요구). 효용 제한: `xnu-cc.py`는 `xcrun` SDK도 필요하다 (CI-PRECHECK 3번). buildtree 아티팩트 없이는 실행할 수 없다.
+
+**E. 다음 세션 후보 (승인 조합별).**
+- QEMU 승인 → `tools/qemu-sweet.py` 스모크 (커널 아티팩트 필요).
+- clang 승인 + buildtree 확보 → `xnu-cc.py`로 SweetGPU 단위 컴파일 확인.
+- shim PAS 설계 (코드 설계, 승인 필요): PAS_INIT_IMAGE, MEM_SETUP, AUTH_AND_RESET과 예약 영역.
+- GPU 전원 문서화 (코드 없음): GDSC 오프셋, GMU 경로.
+- 폰 연결 후: SQE/GMU 펌웨어 조사 (승인 1 재요청).
 
 ### 세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`), 펌웨어 조사는 폰 미연결로 보류
 

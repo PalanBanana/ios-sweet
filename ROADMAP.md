@@ -98,12 +98,13 @@
 | 2026-10-20 (세션 14) | CI 결과 확인 | **Case N (CI 미실행)** | fork `ci-validate/v1` = `fd539b9`, 새 run 로그 없음. NO_UPDATE 의미 정정 (하드웨어 RPTR 섀도를 끈다). TSB/ADDR_MODE 적용 초안은 승인 전 미적용 |
 | 2026-10-20 (세션 15) | CI 결과 확정 | **PASS (run `39350775805`, 빌드 커밋 `ad20b73`)** | 0082 재작성 (`f6bdb2b`, `a42cd8b`) 컴파일과 링크 통과, 아티팩트 3종. 승인 대기: 펌웨어 조사, TSB 3개, ADDR_MODE 12개. NO_UPDATE는 세션 16 |
 | 2026-10-20 (세션 16) | 승인 2+3과 readFuse 정리 | **커밋 `580e857`, CI 대기** | TSB 3개 레지스터와 ADDR_MODE 12개 쓰기 (실행 경로 없음). `readFuse` `-Wcast-align` 정리 (warning-only, 0x41a0 정렬 static_assert). 승인 1 (펌웨어 조사)은 폰 미연결로 미실행. 승인 4 (NO_UPDATE) 보류 |
+| 2026-10-20 (세션 16, 분석) | shim SCM, hw_init 매핑, personality 준비 | **코드 변경 없음** | shim에 SCM/PAS 없음 (SMC는 PSCI뿐). hw_init 쓰기 약 140개 중 0082 구현 19개. GMU·SQE·SCM·GDSC가 다음 장벽. personality는 게이트 닫힘에서 레지스터를 건드리지 않음. QEMU·clang 설치는 승인 대기 |
 
 참고: 원 요청의 날짜 자리표시(`2024-XX-XX`)는 실제 날짜 2026-10-19로 적었다.
 
 ## 5. 다음 세션 후보 (우선순위)
 
-- **P0:** CI 컴파일 검증 성공 (첫 run PASS, 로그 재확인). **GPU 상태: CI 컴파일 PASS** (run `39350775805`, 빌드 커밋 `ad20b73`). 세션 16 커밋 `580e857` (TSB/ADDR_MODE 쓰기, readFuse 정리)은 CI 대기. 실행 동작은 미검증이다. push 명령은 `git push fork HEAD:ci-validate/v1`이다 (`CI-PRECHECK.md` 세션 13). `ci-validate/v1`을 포크에서 실행하고 로그에서 `Skipping patch` 0건을 확인한다. 절차는 `CI-TRIGGER.md`.
+- **P0:** CI 컴파일 검증 성공 (첫 run PASS, 로그 재확인). **GPU 상태: CI 컴파일 PASS** (run `39350775805`, 빌드 커밋 `ad20b73`). run `39359712049` (빌드 커밋 `dec211a`, `580e857` 포함)은 컴파일 PASS이고 `SweetGPU` 경고는 0이다. 실행 동작은 미검증이다. push 명령은 `git push fork HEAD:ci-validate/v1`이다 (`CI-PRECHECK.md` 세션 13). `ci-validate/v1`을 포크에서 실행하고 로그에서 `Skipping patch` 0건을 확인한다. 절차는 `CI-TRIGGER.md`.
   - 로컬 컴파일과 QEMU는 첫 CI run 이후로 연기한다 (입력 부재). 결정 필요: 스위프트 clang 설치 여부 (`xnu-cc.py`), `qemu-system-arm` 설치 여부 (사용자 승인 필요).
 - **P0 후속 (세션 5 완료):** 게이트 값 검사 (`21b42d0`), SWEET 가드 (`723c65b`), 패치 skip 검사 (`66ea9a5`). 남은 것: 0081 빌드 확인 (CI 로그).
 - **P1:** GPU 하드웨어 bring-up. DT 값은 세션 12에서 확정됐다. 남은 것: 클록/GDSC 제어, SMMU, GBIF slice id, speed bin 실측, zap 필요 여부 (SSD 마운트 후 펌웨어 확인).
