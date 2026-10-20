@@ -6,30 +6,30 @@
 - **실패**: 확인했고 맞지 않는다. 옆 칸에 조치를 적었다.
 - **미검증**: 확인할 입력이 이 머신에 없거나, 첫 CI run이 있어야 확인된다. 사유를 적었다.
 
-기준 시점: 2026-10-19, 세션 7. 기준 커밋: `ci-validate/v1`의 HEAD (`git rev-parse --short ci-validate/v1`).
+기준 시점: 2026-10-19 (세션 7), 갱신 2026-10-20 (세션 13). 기준 커밋: 세션 13에서 `main`의 HEAD (`a42cd8b`). 로컬 `ci-validate/v1`은 `fd539b9`이며 push 대상이 아니다 (아래 세션 13 절).
 
 ## 여덟 항목
 
 | # | 항목 | 판정 | 근거 또는 조치 |
 |---|---|---|---|
-| 1 | `git apply --check` 84/84 | **통과** | 깨끗한 `xnu-8796.141.3` 워크트리에서 스테이지 스크립트 3개를 먼저 실행한 뒤 패치 84개를 CI 순서로 적용. 스테이지는 SDK 헤더를 placeholder로 받으므로 이 확인은 경로와 문맥만 본다. 0082–0084의 `files.arm64` 앵커는 23/24/25행. 조치: 패치를 고쳤다면 같은 절차로 다시 확인 |
-| 2 | `tools/test-check-patch-log.sh` 17/17 | **통과** | 합성 로그 17개 케이스 전부 통과. 실제 CI 로그로는 아직 검증되지 않았다 |
+| 1 | `git apply --check` 84/84 | **통과** | 깨끗한 `xnu-8796.141.3` 워크트리에서 스테이지 스크립트 3개를 먼저 실행한 뒤 패치 84개를 CI 순서로 적용. 스테이지는 SDK 헤더를 placeholder로 받으므로 이 확인은 경로와 문맥만 본다. 0082–0084의 `files.arm64` 앵커는 22/23/24행 (hunk `@@ -22,1`, `@@ -23,1`, `@@ -24,1`, 세션 13 확인). 세션 13 재확인: `a42cd8b`에서 84/84. 조치: 패치를 고쳤다면 같은 절차로 다시 확인 |
+| 2 | `tools/test-check-patch-log.sh` 18/18 | **통과** | 합성 로그 18개 케이스 전부 통과 (세션 13 재확인). 실제 CI 로그는 7-1 표의 SUMMARY 줄로 확인했다 |
 | 3 | `tools/xnu-cc.py`로 0082–0084 컴파일 | **미검증** | 사유 세 가지. (a) 입력 부재: CI 로그와 `xnu-buildtree`가 없다. 이 트리로는 CI run이 한 번도 없었다. (b) 도구가 `~/swift/usr/bin/clang` (swiftlang 포크)을 하드코딩한다 (`tools/xnu-cc.py:25`). 이 머신에는 없다. (c) 빌드 디렉터리 (`build/xnu.obj`의 Makefile과 `meta_features.h`)는 xnu 빌드가 만든다. 그 빌드의 SDK 해석은 `/usr/bin/xcrun`에 기대며 (`makedefs/MakeInc.cmd:108,124`), 이 머신에는 `/usr/bin/xcrun`이 없다. `--help`는 지원되지 않는다 (`sys.argv[2]`에서 IndexError). 사용법은 `tools/xnu-cc.py` 모듈 설명문에 있다. 조치: 첫 CI run 후 아래 "첫 실행 후 명령"으로 재시도. 1차 입력은 `xnu-build-log`, 2차는 `xnu-buildtree` |
 | 4 | `tools/qemu-sweet.py` 스모크 | **미검증** | 사유 세 가지. (a) `qemu-system-aarch64`가 없다 (`qemu-sweet.py:184`가 호출). (b) 커널 산출물이 없다 (`xnu-kernel` 아티팩트는 CI가 만든다). (c) payload는 `mkpayload.py KERNEL ADT`로 만들며 커널이 필요하다. ADT는 `tools/mkadt.py OUT --qemu`로 로컬에서 만들 수 있다 (확인: 4164 바이트, `/product` 노드 없음 경고). 조치: `qemu-system-arm` 설치 (사용자 승인 필요), CI 커널 확보, payload 생성 후 `--kernel`과 `--fail-on-panic`으로 실행 |
-| 5 | `origin` push URL `DISABLED` | **통과** | `git remote -v`: fetch는 upstream, push는 `DISABLED`. `git push --dry-run origin main`이 거부됨 |
-| 6 | `ci-validate/v1`의 기대 커밋 | **통과** | 세션 7 마감 HEAD를 가리킨다. push 직전에 `git rev-parse --short ci-validate/v1`이 기대 값과 같은지 확인 |
-| 7 | 첫 CI run에서만 확인되는 항목 | **미검증** | 아래 표 7-1 |
-| 8 | `CI-TRIGGER.md` §3 명령 블록 | **통과** | `macos_version`, `kernel_config`, `machine_config`, `keep_going` 네 입력이 `xnu.yml`의 `workflow_dispatch` 입력과 일치. `--ref ci-validate/v1` 사용. 명령 목록 (`gh run list/watch/view`) 확인 |
+| 5 | `origin` push URL `DISABLED` | **통과** | `git remote -v`: fetch는 upstream, push는 `DISABLED`. `git push --dry-run origin main`이 거부됨. 세션 13 재확인: `git remote get-url --push origin` = `DISABLED` |
+| 6 | 푸시할 커밋 | **정정 (세션 13)** | 로컬 `ci-validate/v1`은 `fd539b9`다 (세션 7 기록의 `d61ef3c`과도 다르다). `git push fork ci-validate/v1`은 새 커밋을 보내지 않는다. 푸시는 `git push fork HEAD:ci-validate/v1`로 하고, 푸시 전에 `git rev-parse --short HEAD`를 기록한다 |
+| 7 | 첫 CI run에서만 확인되는 항목 | **부분 확인 (세션 13)** | 아래 표 7-1. 첫 run의 로그와 아티팩트가 이 머신에 있다 |
+| 8 | `CI-TRIGGER.md` §3 명령 블록 | **통과** | `macos_version`, `kernel_config`, `machine_config`, `keep_going` 네 입력이 `xnu.yml`의 `workflow_dispatch` 입력과 일치. `--ref ci-validate/v1` 사용. 명령 목록 (`gh run list/watch/view`) 확인. 세션 13: 자동 실행은 `push: main`뿐이다. `ci-validate/v1` push는 빌드를 시작하지 않으므로 `gh workflow run`이 필요하다 |
 
 ### 7-1. 첫 CI run에서 확인할 다섯 항목
 
 | 항목 | 판정 | 근거 | 확인 방법 |
 |---|---|---|---|
-| `gh run view --log`의 열 구분 (탭 또는 공백) | **미검증** (근거 부분 있음) | `tools/xnu-cc.py:36`의 정규식 `^build\s+Build\s+\S+\s+`은 탭과 공백을 모두 허용한다. 그래서 기존 `awk -F'\t'`은 탭이 아니면 틀린다. 플레이북은 기본 FS 방식 (`awk '$1=="build" && $2=="Build"'`)을 쓴다 | `head -n 3 run.txt \| cat -A`. 탭이면 `^I`가 보인다 |
-| `if: always()` verify 단계 실행 | **미검증** (문서 기준) | GitHub 문서: `always()`는 앞 단계가 실패해도 실행된다. 이 머신에서 Actions를 실행할 수 없다 | 로그에 `Verify patch application` 단계와 `SWEET_PATCH_SUMMARY` 줄이 있는지 |
-| `xnu-build-log` 아티팩트 생성 | **미검증** | 워크플로우 `Upload build log` 단계 (`if: always()`) | `gh api repos/<USER>/ios-sweet/actions/runs/<RUN_ID>/artifacts --jq '.artifacts[].name'` |
+| `gh run view --log`의 열 구분 (탭 또는 공백) | **확인 (세션 13): 탭** | `tools/xnu-cc.py:36`의 정규식 `^build\s+Build\s+\S+\s+`은 탭과 공백을 모두 허용한다. 그래서 기존 `awk -F'\t'`은 탭이 아니면 틀린다. 플레이북은 기본 FS 방식 (`awk '$1=="build" && $2=="Build"'`)을 쓴다 | `head -n 3 run.txt \| cat -A`. 탭이면 `^I`가 보인다 |
+| `if: always()` verify 단계 실행 | **확인 (세션 13, run.log)** | GitHub 문서: `always()`는 앞 단계가 실패해도 실행된다. 이 머신에서 Actions를 실행할 수 없다 | 로그에 `Verify patch application` 단계와 `SWEET_PATCH_SUMMARY` 줄이 있는지 |
+| `xnu-build-log` 아티팩트 생성 | **확인 (세션 13, 로컬 파일)** | 워크플로우 `Upload build log` 단계 (`if: always()`) | `gh api repos/<USER>/ios-sweet/actions/runs/<RUN_ID>/artifacts --jq '.artifacts[].name'` |
 | 실패 run에 `xnu-kernel` 없음 | **미검증** (규칙상 기대) | `xnu-kernel` 업로드는 `if: success()`. 실패 run에 있으면 워크플로우가 깨진 것 | 위 명령으로 실패 run의 목록 확인. 성공 run에는 `xnu-kernel`이 있어야 한다 |
-| SUMMARY 줄 값 | **미검증** | 기대: `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0`. 합성 로그로만 확인했다 | `grep SWEET_PATCH_SUMMARY run.txt` |
+| SUMMARY 줄 값 | **확인 (세션 13, run.log)** | `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3` (줄 1개) | `grep SWEET_PATCH_SUMMARY run.txt` |
 
 ## 첫 실행 후 명령 (항목 3과 4의 재시도)
 
@@ -78,7 +78,7 @@ python3 tools/xnu-cc.py $D/build.log $D/bt \
 - 매크로 충돌: 0. IO80211/IOAudio 참조: 코드에 0 (주석에만 있다).
 - 선례 (SWEET 컴파일 파일 기준): `SweetSurface.cpp`가 `page_size`와 `NULL`을 쓴다. `SweetBattery.cpp`, `SweetCPU.cpp`, `SweetFramebuffer.cpp`가 `uint64_t`/`int64_t`를 쓴다. `SweetCPU.cpp`가 `#if defined(SWEET)` 가드를 쓴다.
 - `SWEET` 매크로: `pexpert/pexpert/arm64/SWEET.h:18`에서 `#define SWEET 1`. `board_config.h`가 `ARM64_BOARD_CONFIG_SWEET`일 때 이것을 포함하므로, 가드는 CI의 `MACHINE_CONFIG=SWEET` 빌드에서 참이다.
-- `IOKIT_ENABLE_SHARED_PTR`은 `bsd/sweet_hfs/core/hfs_iokit.cpp`에서만 정의된다. 그 TU 안에서만 유효하므로 `withOptions`는 `T*`를 돌려준다.
+- `IOKIT_ENABLE_SHARED_PTR`은 TU 단위 `#define`이다 (예: `iokit/Kernel/IOBufferMemoryDescriptor.cpp:28`, `IOCPU.cpp:29`). 전역 정의는 없다 (세션 13 확인). 이 드라이버 TU는 정의하지 않으므로 `withOptions`는 `T*`를 돌려준다. (세션 8의 "hfs TU에서만"은 틀렸다.)
 
 **한계 (정적 대조가 못 잡는 것):** 실제 플래그로 전처리하지 않았다. 조건부 include는 무시하고 존재 여부로만 판단했다. SDK 플랫폼 헤더 (`sdk-kernel-platform`)는 보지 않았다. 템플릿, 오버로드 해석, 암시적 변환의 세부는 검사하지 않았다. 경고는 `BUILD_WERROR=0`이라 실패가 아니다. **실제 컴파일 검증은 첫 CI run에서만 가능하다.**
 
@@ -154,3 +154,30 @@ python3 tools/xnu-cc.py $D/build.log $D/bt \
 - **awk 합성 검증** (`tools/test-post-ci-analyze.sh`): 탭 형식과 공백 형식 두 가지 모두에서 Build 단계 97줄을 정확히 뽑는다. 옛 필터 `-F'\t' '$2=="Build"'`는 공백 형식에서 0줄이고, 탭 형식에서도 다른 job의 `Build` 단계 1줄을 더 뽑았다 (98 대 97). job 열을 보지 않았기 때문이다. 실 CI 로그로는 아직 검증하지 않았다.
 - **post-ci-analyze.sh**: 합성 fixture 5개 (PASS, FAIL, BUILD_ABORTED_BEFORE_VERIFY, COMPILE_ERROR, UNKNOWN)가 기대 판정과 종료 코드를 낸다. fixture는 실제 체커 출력에서 만들었다.
 - **xnu-cc.py 제안 3건**: 구문 검증만 했다 (`ast.parse`, 실행 안 함). 적용하지 않았다.
+
+## 세션 13 (2026-10-20): push 명령 정정, 재확인, sweetgpu 체크리스트 (코드 변경 없음)
+
+**push 명령 (정정).** 로컬 `ci-validate/v1`은 `fd539b9`다. `git push fork ci-validate/v1`은 아무 커밋도 보내지 않는다. 다음을 쓴다.
+
+    git rev-parse --short HEAD        # 기록: 푸시 대상
+    git push fork HEAD:ci-validate/v1
+
+fast-forward다 (`fd539b9`의 자손인 `e8e2acb`, `f6bdb2b`, `8272b95`, `a42cd8b`와 세션 13 문서 커밋). 포크의 `ci-validate/v1`이 다른 커밋을 가리키면 git이 거부한다. 거부되면 멈추고 세션 14에 알린다.
+
+**트리거.** `xnu.yml`의 자동 실행은 `push: branches: [main]`뿐이다. `ci-validate/v1`로 push해도 빌드는 시작되지 않는다. 포크에서 Actions가 켜져 있어야 하고, `gh workflow run`으로 수동 실행한다 (CI-TRIGGER.md §3).
+
+**재확인 (이 머신, `a42cd8b`).** 항목 1: 84/84 (깨끗한 worktree, 스테이지 3개 실행). 항목 2: 18/18. 항목 5: `DISABLED`. 항목 8: `workflow_dispatch` 입력 4개 일치.
+
+**첫 run의 근거 (이 머신).**
+- `run.log`: SUMMARY 줄 1개 (`result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`). Build 단계 줄 125,761개 (탭 구분). `Verify patch application` 12회.
+- 아티팩트: `build-log/build.log` (25 MB), `buildtree-artifact/buildtree.tgz` (23 MB), `kernel-artifact/` (`kernel.development.sweet`, SHA256SUMS 검사 OK).
+- 실행 ID `39257384282`는 사용자가 알려준 값이다. 로그와 대조할 수 없다 (`gh run list`로 확인). 빌드 커밋은 로그에 없다. 세션 9 기준 `fd539b9`로 추정한다.
+
+**세션 14 입력 (코드 변경 없음).** NO_UPDATE 불일치 (0082 `0x20C`, Linux `0x0800020C`), TSB/ADDR_MODE 표 (NOTES 세션 13). 다운스트림 zap 조회 방식은 미확정이다.
+
+**sweetgpu=1 하드웨어 테스트 전 체크리스트 (세션 13).** 모두 확인해야 한다. 하나라도 안 되면 실행하지 않는다.
+- [ ] personality 없음. 세션 13 확인: `MsmGpuAdreno618`은 0082 패치와 문서에만 있다. `IOKitPersonalities` 항목에 이 클래스가 없고, `allocClassWithName` 호출이 없다.
+- [ ] ADT에 GPU 노드 없음. `tools/mkadt.py` 노드 목록: arm-io, asmb, buttons, chosen, cpus, defaults, device-tree, disp0, gic, memory-map, product, sweet-fbcon, sweet-ufs, wdt. GPU 노드가 없다.
+- [ ] 이번 부팅에 `sweetgpu=1`을 넣는 것을 사용자가 승인했다. 넣지 않은 부팅 (기본)은 레지스터에 접근하지 않는다.
+- [ ] 사용자가 승인했다 (AGENTS.md: 임시 `fastboot boot`, Android와 백업 보존, 파괴적 단계는 사용자 확인).
+- [ ] 멈추면 전원 키를 길게 눌러 강제 재시작한다. 재시작 후 `sweetgpu` 없이 부팅해 정상 복귀를 확인한다.
