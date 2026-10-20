@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 13 (2026-10-20): CI 준비와 연구.** 코드 변경 없음. push는 `git push fork HEAD:ci-validate/v1`이다 (로컬 `ci-validate/v1`은 `fd539b9`라서 `git push fork ci-validate/v1`은 아무것도 보내지 않는다). CI는 수동 `workflow_dispatch`다. NO_UPDATE 불일치 (0082 `0x20C`, Linux `0x0800020C`)와 TSB/ADDR_MODE 표는 세션 14 입력이다. 상세: 아래 '세션 13' 절.
 - **세션 12 (2026-10-19): 0082 GPU 재작성 (`f6bdb2b`).** DT 값으로 다시 썼다. 확정 값, 브리프 정정, 미확정 목록은 아래 '세션 12' 절.
 - **GPU 게이트 (세션 12에서 정정; 세션 6 문구는 틀렸다):** `sweetgpu=1`로 게이트가 열리면 이제 레지스터를 쓴다 (RBBM 리셋, INT 마스크, SECVID, CP_RB_BASE/CNTL/WPTR). zap 로더는 없고 `kIOReturnUnsupported`를 돌려주며, 이를 Linux의 `-ENODEV` 경로로 처리해 계속한다. 첫 쓰기는 전원·클록이 꺼진 GPU에서 버스 폴트를 일으킬 수 있다. 게이트 바깥에서는 레지스터를 건드리지 않는다. 운영 규칙은 그대로 `sweetgpu=1`만 쓰는 것이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다.
 - **세션 8 (2026-10-19): 정적 컴파일 대조.** 0082–0084를 적용된 트리에서 xnu-8796.141.3 헤더와 대조했다 (include 27개, XNU 이름 30개, 멤버 시그니처 39개, 호출 79건, 접근성, 매크로 충돌). **확정 오류 0건, 수정 0건.** 컴파일은 하지 않았다. 실제 검증은 첫 CI run이다. 남은 likely-error: 없음. 한계와 근거는 `CI-PRECHECK.md` 세션 8 절. `tools/xnu-cc.py`는 환경변수 오버라이드가 없고 (`CLANG`, `CI_DXB` 하드코딩), `--help`도 없다. 수정 제안 3개는 `CI-PRECHECK.md`에 있고 적용하지 않았다. **스위프트 clang과 qemu 설치는 첫 CI run 후로 연기.** 근거: `xnu-cc.py`는 CI 로그와 buildtree가 없으면 한 줄도 검사하지 못하고, QEMU는 커널이 없으면 대상이 없다. 설치만으로는 검증이 늘지 않는다. 정적으로 할 수 있는 검사는 이번에 끝냈다.
@@ -22,6 +23,59 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 13 (2026-10-20): CI 준비와 오프라인 연구 (코드 변경 없음)
+
+**결과.** 0082 (`f6bdb2b`, `a42cd8b`)는 아직 CI에서 컴파일되지 않았다. 패치와 코드는 바꾸지 않았다. 체인 84/84, 체크 18/18 (`a42cd8b`에서 재확인). 푸시와 CI 트리거는 사용자 몫이다 (`CI-PRECHECK.md` 세션 13 절).
+
+**push 명령 정정.** 로컬 `ci-validate/v1`은 `fd539b9`다. `git push fork ci-validate/v1`은 아무 커밋도 보내지 않는다. 올바른 명령은 `git push fork HEAD:ci-validate/v1`이다 (fast-forward). `xnu.yml`은 `push: main`에만 자동 실행한다. `ci-validate/v1` push는 빌드를 시작하지 않는다. `gh workflow run ... --ref ci-validate/v1`로 수동 실행하며, 포크 Actions가 켜져 있어야 한다 (`CI-TRIGGER.md` §3).
+
+**Task B: 신규 API (pristine `1b191cb`). 모두 맞다.**
+- `IOInterruptAction` = `void (*)(OSObject*, void*, IOService*, int)` (`IOService.h:227`). 핸들러 시그니처와 일치.
+- `registerInterrupt(int, OSObject*, IOInterruptAction, void* = NULL)`, virtual public (`IOService.h:1363`). 소스가 없으면 `kIOReturnNoInterrupt`를 돌려주고, start가 실패한다 (fail-closed).
+- `unregisterInterrupt(int)`, virtual public (`IOService.h:1386`).
+- `IOMemoryMap::getVirtualAddress/getPhysicalAddress/getLength`: 클래스 877행, public 901행 이후, 선언 907/930/937행.
+- `IOMemoryDescriptor::getPhysicalAddress()`: public (`IOMemoryDescriptor.h:713`).
+- `kIOMemoryPhysicallyContiguous = 0x10`: 전역 익명 enum (`IOBufferMemoryDescriptor.h:35-36`).
+- `withOptions(IOOptionBits, vm_size_t, vm_offset_t = 1)` → `OSPtr<T>`. 옵션이 정의되지 않으면 `T*` (`OSPtr.h:107`).
+- 상속: `IOService : IORegistryEntry : OSObject`, 비가상. `static_cast` 다운캐스트는 안전하다.
+- 정정: `IOKIT_ENABLE_SHARED_PTR`은 TU별 `#define`이다 (예: `IOBufferMemoryDescriptor.cpp:28`, `IOCPU.cpp:29`). 전역 정의는 없다. 세션 8 문서의 "hfs TU에서만"은 틀렸다 (`CI-PRECHECK.md` §8 정정).
+
+**Task C: TSB와 ADDR_MODE (세션 14 입력, 코드 추가 없음).** Mesa 오프셋은 dword 인덱스다. Linux의 쓰기는 모두 `gpu_write` 또는 `gpu_write64`다 (rmw 없음).
+
+| 레지스터 | Mesa | Linux 쓰기 | 조건 | 라인 |
+|---|---|---|---|---|
+| `RBBM_SECVID_TSB_CNTL` | 0xF803 | 0 | 무조건 | 1210 |
+| `RBBM_SECVID_TSB_TRUSTED_BASE` | 0xF800 (reg64) | 0x0 | 무조건 | 1220 |
+| `RBBM_SECVID_TSB_TRUSTED_SIZE` | 0xF802 | 0 | 무조건 | 1221 |
+| `CP_ADDR_MODE_CNTL` | 0x0842 | 0x1 | `!adreno_is_a7xx` | 1225 |
+| `VSC_ADDR_MODE_CNTL` | 0x0C01 | 0x1 | 같음 | 1226 |
+| `GRAS_ADDR_MODE_CNTL` | 0x8601 | 0x1 | 같음 | 1227 |
+| `RB_ADDR_MODE_CNTL` | 0x8E05 | 0x1 | 같음 | 1228 |
+| `PC_ADDR_MODE_CNTL` | 0x9E01 | 0x1 | 같음 | 1229 |
+| `HLSQ_ADDR_MODE_CNTL` | 0xBE05 | 0x1 | 같음 | 1230 |
+| `VFD_ADDR_MODE_CNTL` | 0xA601 | 0x1 | 같음 | 1231 |
+| `VPC_ADDR_MODE_CNTL` | 0x9601 | 0x1 | 같음 | 1232 |
+| `UCHE_ADDR_MODE_CNTL` | 0x0E00 | 0x1 | 같음 | 1233 |
+| `SP_ADDR_MODE_CNTL` | 0xAE01 | 0x1 | 같음 | 1234 |
+| `TPL1_ADDR_MODE_CNTL` | 0xB601 | 0x1 | 같음 | 1235 |
+| `RBBM_SECVID_TSB_ADDR_MODE_CNTL` | 0xF810 | 0x1 | 같음 | 1236 |
+
+- 값 0x1은 `a5xx_address_mode`의 `ADDR_64B`다 (`adreno_common.xml:388-391`). TSB 세 개는 보안 메모리 범위를 끈다 (`a6xx_gpu.c:1216-1218`).
+- 정정: 프롬프트의 `RBBM_SECVID_TSB_SIZE`는 `RBBM_SECVID_TSB_TRUSTED_SIZE`다. `RBBM_SECVID_TSB_TRUSTED_CTX`는 Mesa에 없다 (0건). `RBBM_SECVID_TSB_STATUS` (0xfc00)는 `A7XX-` 전용이다.
+- 정정: 세션 12 문서의 ADDR_MODE 범위 `1229-1236`은 `1225-1236`이다 (조건 줄은 1223). 무조건인 것은 TSB 세 개뿐이다. ADDR_MODE 열두 개는 `!adreno_is_a7xx`일 때 실행되며 a6xx에서는 실행된다.
+
+**NO_UPDATE (세션 14 결정).** `hw_apriv`의 유일한 대입은 `a6xx_gpu.c:2717`이다 (`!!(info->quirks & ADRENO_QUIRK_HAS_HW_APRIV)`). 칩 `0x06010800`의 카탈로그 항목 두 개 (`a6xx_catalog.c:763-774` `qcom,sm7150`, `:789-800` `revn 618`) 모두 quirk가 없다. 그래서 어느 항목이 매칭되든 `hw_apriv=0`이고, Linux는 `CP_RB_CNTL = 0x0800020C`를 쓴다 (`a6xx_gpu.c:1455-1456`, NO_UPDATE = bit 27). 재작성은 `0x20C`만 쓴다 (Linux의 `hw_apriv=1` 경로, `a6xx_gpu.c:1453`). 불일치다. 0082 수정은 CI 결과 후 세션 14에서 결정한다.
+
+**Task D: 다운스트림 KGSL의 zap 조회 (미확정).**
+- 로컬: 다운스트림 KGSL 소스가 `~/refs`에 없다. Linux 드라이버 트리에 `kgsl-hyp`, `pil_get`, `qcom,firmware-name`이 없다.
+- 사실: `pil_gpu`의 PAS id `0x0d`는 Linux `GPU_PAS_ID` 13과 같다 (`a6xx_gpu.c:17`). 이 노드가 GPU zap일 가능성이 높다. compatible은 `qcom,pil-tz-generic`, 속성은 `qcom,firmware-name`이다 (`sweet.dts:17674-17678`). GPU 노드는 이 노드를 참조하지 않는다. Linux 업스트림 zap은 자식 `zap-shader`를 찾는다 (`adreno_gpu.c:49`).
+- 웹 검색 2회: 다운스트림의 조회 방식은 찾지 못했다. 확인한 것은 업스트림 2020 패치의 zap `firmware-name` 속성뿐이다 (요약만 확인, 본문 미열람: https://lkml.rescloud.iu.edu/hypermail/linux/kernel/2001.1/04514.html).
+- 판정: 미확정. 다운스트림이 이 노드를 이름이나 compatible로 찾는다면, 하드웨어의 zap 로드는 TZ를 거치고 0082의 `-ENODEV` 가정은 틀린다. 그러면 SECVID 경로는 Linux 주석이 경고한 대로 실패할 수 있다 (`a6xx_gpu.c:1496-1497`). Linux의 zap 로드는 SCM/PAS 호출을 쓴다 (`a5xx_gpu.c:656, 676`). XNU에는 그 경로가 없다.
+
+**sweetgpu=1 상태.** personality 없음 (`MsmGpuAdreno618`은 0082 패치와 문서에만 있다). ADT에 GPU 노드 없음 (`tools/mkadt.py` 노드 목록에 GPU가 없다). 이 둘이 함께 막고 있다. 둘 중 하나라도 바뀌면 첫 쓰기의 위험이 시작된다.
+
+**다음 (사용자).** `CI-PRECHECK.md` 세션 13 절의 push와 트리거 명령을 실행하고, run ID와 `run.log`를 세션 14에 첨부한다.
 
 ### 세션 12 (2026-10-19): 0082 GPU 재작성 (실제 DTB 값, `f6bdb2b`)
 
@@ -55,7 +109,7 @@
 4. **personality 없음.** `MsmGpuAdreno618`은 0082 패치에만 나온다. 매칭으로는 `start()`가 호출되지 않는다. `sweetgpu=1`은 명시적 인스턴스화가 있을 때만 효과가 있다.
 5. **bin 0xa7의 initial level 7이 센티넬 항목이다** (`sweet.dts:18182`). 그 bin은 `start()`가 거부한다.
 6. **Linux와 다르게 남긴 것.** INT 마스크: Linux hw_init은 `A6XX_INT_MASK`를 쓰지만 (`a6xx_gpu.c:1436-1437`), 재작성은 0을 쓴다. SW 리셋: Linux는 `a6xx_recover`에서만 쓰지만 (gmu-wrapper/rgmu, `a6xx_gpu.c:1606-1612`), 재작성은 powerUp에 둔다. 둘 다 미확정으로 표시했다.
-7. **Linux hw_init이 쓰고 재작성은 쓰지 않는 것:** `RBBM_SECVID_TSB_CNTL` (0xF803), `TSB_TRUSTED_BASE` (0xF800, reg64), `TSB_TRUSTED_SIZE` (0xF802)를 0으로 (`a6xx_gpu.c:1210-1221`), `*_ADDR_MODE_CNTL` 12개를 1로 (`a6xx_gpu.c:1229-1236`, a7xx가 아닌 경로). 범위 밖이라 넣지 않았다. 다음 세션 후보.
+7. **Linux hw_init이 쓰고 재작성은 쓰지 않는 것:** `RBBM_SECVID_TSB_CNTL` (0xF803), `TSB_TRUSTED_BASE` (0xF800, reg64), `TSB_TRUSTED_SIZE` (0xF802)를 0으로 (`a6xx_gpu.c:1210-1221`), `*_ADDR_MODE_CNTL` 12개를 1로 (`a6xx_gpu.c:1225-1236`, 조건 `!adreno_is_a7xx`; 세션 13에서 라인 정정). 범위 밖이라 넣지 않았다. 다음 세션 후보.
 8. **MMIO 검증은 제한적이다.** 칩 ID 레지스터가 Mesa에 없고 (`CHIP_ID` 0건), Linux도 칩 ID를 레지스터에서 읽지 않는다. 읽기 전용 신원 검사는 할 수 없다. 대신 각 창의 매핑 길이가 DT 크기 이상인지 확인한다.
 
 **미확정:**
@@ -66,7 +120,7 @@
 - 주파수 적용: 표를 골라 로그만 찍는다. 클록은 프로그램하지 않는다.
 - IRQ: `registerInterrupt(0)`은 provider의 ADT 인터럽트 컨트롤러에 의존한다. `IOService::registerInterrupt`는 `lookupInterrupt` 실패 시 에러를 돌려준다. 그 경우 start가 실패한다. 실기 미검증.
 - TSB 세 개와 ADDR_MODE 12개 (위 7). CP_RB_RPTR_ADDR (CP 시작 전에는 불필요).
-- NO_UPDATE: `hw_apriv`에 따른다 (`a6xx_gpu.c:1452-1456`). 재작성은 0x20C만 쓴다.
+- NO_UPDATE: `hw_apriv`에 따른다 (`a6xx_gpu.c:1452-1456`). 재작성은 0x20C만 쓴다. 세션 13: 이 칩의 카탈로그 항목 두 개에는 `ADRENO_QUIRK_HAS_HW_APRIV`가 없다 (`a6xx_catalog.c:763-774`, `:789-800`). Linux는 `hw_apriv=0`으로 `CP_RB_CNTL = 0x0800020C` (NO_UPDATE = bit 27, `adreno_common.xml:143`)를 쓴다. 재작성의 `0x20C`와 다르다 (세션 14 결정).
 - SW 리셋 유지 여부 (위 6).
 - 이 폰의 speed bin 값: 읽기 전에는 모른다. 표에 없으면 start가 실패한다 (fail-closed).
 - 칩 ID 레지스터 오프셋.

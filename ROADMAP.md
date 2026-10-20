@@ -39,9 +39,9 @@
 
 ### GPU
 - GBIF_SCACHE_CNTL0/1 값: 커널이 런타임 LLCC slice id에서 계산한다 (`a6xx_gpu.c:1980-2050`). 이 보드의 slice id가 필요하다.
-- `CP_RB_CNTL`의 `NO_UPDATE` 비트: `hw_apriv`에 따라 달라진다 (`a6xx_gpu.c:1452-1456`).
+- `CP_RB_CNTL`의 `NO_UPDATE` 비트: `hw_apriv`에 따라 달라진다 (`a6xx_gpu.c:1452-1456`). 세션 13: 이 칩은 `HAS_HW_APRIV`가 없어 Linux는 `0x0800020C`를 쓴다. 0082의 `0x20C`와 다르다 (세션 14 결정).
 - 프레임 제출 재설계: `CP_INDIRECT_BUFFER` 기반 command stream과 fence.
-- zap: DT의 `pil_gpu`는 GPU 노드가 참조하지 않는다 (`sweet.dts:17674-17678`). Linux는 자식 `zap-shader`만 찾으므로 (`adreno_gpu.c:49`) 이 DT에서는 `-ENODEV` 경로 (`a6xx_gpu.c:1515-1516`)가 된다. secure mode가 필요한 GPU인지는 미확정이다. 펌웨어 `a615_zap.*`는 SSD의 Android vendor 파티션에 있고 아직 확보하지 않았다.
+- zap: DT의 `pil_gpu`는 GPU 노드가 참조하지 않는다 (`sweet.dts:17674-17678`). Linux는 자식 `zap-shader`만 찾으므로 (`adreno_gpu.c:49`) 이 DT에서는 `-ENODEV` 경로 (`a6xx_gpu.c:1515-1516`)가 된다. secure mode가 필요한 GPU인지는 미확정이다. PAS id 0x0d는 Linux `GPU_PAS_ID` 13 (`a6xx_gpu.c:17`)과 같아서 GPU zap 노드일 가능성이 높다. 다운스트림 조회 방식은 로컬과 웹 검색에서 확인하지 못했다 (세션 13). 펌웨어 `a615_zap.*`는 SSD의 Android vendor 파티션에 있고 아직 확보하지 않았다.
 - 클록과 GDSC: core_clk, rbbmtimer_clk, mem_clk, mem_iface_clk, gmu_clk (`sweet.dts:17768`); vddcx 0x1c5 (gpu_cx_gdsc), vdd 0x24e (gpu_gx_gdsc) (17777–17778). XNU에 제어 경로가 없다.
 - SMMU: `arm,smmu-kgsl@5040000` (`sweet.dts:10589`). GPU 주소 번역은 미구현이다.
 - TSB와 ADDR_MODE: Linux hw_init은 `RBBM_SECVID_TSB_*`를 0으로, `*_ADDR_MODE_CNTL`을 1로 쓴다 (`a6xx_gpu.c:1210-1236`). 재작성은 쓰지 않는다.
@@ -94,12 +94,13 @@
 | 2026-10-19 (세션 9) | 첫 run 판정 하네스 | **준비 완료** | `tools/post-ci-analyze.sh`, 판정 5종, fixture 5개, 테스트 7/7. 첫 run 로그로 검증 필요 |
 | 2026-10-19 (세션 12) | 0082 재작성 | **완료 (`f6bdb2b`), 미컴파일** | DT 값 반영, stop 게이트 버그 수정, 링 32 KiB로 `0x20C`와 일치, zap은 Linux `-ENODEV` 경로. 체인 84/84, 체크 18/18 |
 | 2026-10-19 (세션 12) | 첫 CI run 판정 | **PASS (로그 재확인)** | 적용 88, 실패 0, 진단 0. 빌드 커밋과 실행 ID는 로그에 없다 |
+| 2026-10-20 (세션 13) | CI 준비와 연구 | **코드 변경 없음** | push 대상은 `HEAD` (로컬 `ci-validate/v1`은 `fd539b9`). `workflow_dispatch`로 수동 실행. NO_UPDATE 불일치와 TSB/ADDR_MODE 표는 세션 14 입력 |
 
 참고: 원 요청의 날짜 자리표시(`2024-XX-XX`)는 실제 날짜 2026-10-19로 적었다.
 
 ## 5. 다음 세션 후보 (우선순위)
 
-- **P0:** CI 컴파일 검증 성공 (첫 run PASS, 로그 재확인). `f6bdb2b` (0082 재작성)는 아직 CI에서 컴파일하지 않았다. `ci-validate/v1`을 포크에서 실행하고 로그에서 `Skipping patch` 0건을 확인한다. 절차는 `CI-TRIGGER.md`.
+- **P0:** CI 컴파일 검증 성공 (첫 run PASS, 로그 재확인). **GPU 상태: CI 검증 대기** (`f6bdb2b`, `a42cd8b`의 0082 재작성은 아직 컴파일되지 않았다). push 명령은 `git push fork HEAD:ci-validate/v1`이다 (`CI-PRECHECK.md` 세션 13). `ci-validate/v1`을 포크에서 실행하고 로그에서 `Skipping patch` 0건을 확인한다. 절차는 `CI-TRIGGER.md`.
   - 로컬 컴파일과 QEMU는 첫 CI run 이후로 연기한다 (입력 부재). 결정 필요: 스위프트 clang 설치 여부 (`xnu-cc.py`), `qemu-system-arm` 설치 여부 (사용자 승인 필요).
 - **P0 후속 (세션 5 완료):** 게이트 값 검사 (`21b42d0`), SWEET 가드 (`723c65b`), 패치 skip 검사 (`66ea9a5`). 남은 것: 0081 빌드 확인 (CI 로그).
 - **P1:** GPU 하드웨어 bring-up. DT 값은 세션 12에서 확정됐다. 남은 것: 클록/GDSC 제어, SMMU, GBIF slice id, speed bin 실측, zap 필요 여부 (SSD 마운트 후 펌웨어 확인).
