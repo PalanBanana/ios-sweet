@@ -3,11 +3,13 @@
 ## 현재 상태 요약 (2026-10-19, 트리아지)
 
 - **완료 (소스 확정):** 0082 GPU 레지스터·리셋·CP_RB_CNTL(0x20C)·칩 ID 종결. 0083 Wi-Fi를 SNOC+QMI 구조로 재작성 (레일 이름 확정, `sweetwifi=1`은 QRTR 부재로 거부).
-- **미완료 (HW bring-up):** GPU GBIF 값(LLCC slice id), NO_UPDATE 비트, 프레임 제출 설계(IB). Wi-Fi 전원·QMI 실구현. 세 부트 인수 게이트의 실기 검증.
+- **미완료 (HW bring-up):** GPU GBIF 값(LLCC slice id), GX 전원 경로(GMU, 세션 19 설계), 프레임 제출 설계(IB). NO_UPDATE는 세션 19에서 구현됨 (`a4b0469`). Wi-Fi 전원·QMI 실구현. 세 부트 인수 게이트의 실기 검증.
 - **블로커 (인프라, defer):** QRTR/remoteproc (Wi-Fi). SoundWire 슬레이브 설계 (Audio, 0084 미착수). SSD 미마운트 (펌웨어 blob, DT 전압).
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 19 (2026-10-20): NO_UPDATE 구현 (커밋 `a4b0469`, 승인 2).** `CP_RB_CNTL = 0x0800020C`. RPTR 섀도는 설정하지 않는다 (shadow 없음). A618 GMU는 `a618_gmu.bin`일 가능성이 높다 (추정). GX 켜기 설계는 Linux 기준 GMU 경로 (호스트 직접 GDSCR 해제는 Linux 선례 없음). XNU에는 RPMh 클라이언트가 있으나 `gfx.lvl` ARC 투표가 없다. SQE 형식과 gpu_region 불일치 (dtbo 오버레이) 조사. 상세: '세션 19' 절.
+- **세션 18 (2026-10-20): 폰 read-only 조사, zap 재분석, 승인 요청 3건 (코드·커밋 변경 없음, 문서 미커밋).** SQE·GMU·zap 실물 확인 (`/vendor/firmware`). Android idle에서 GX·CX·VDD_GFX 모두 off. zap은 Android 커널 PIL(`a615_zap` ONLINE)이 올리고, XNU에는 SCM 경로가 없어 no-zap이 Linux 동등이다. 정정: NO_UPDATE는 SQE와 무관하게 필요하다 (CP 기동 전). 상세: '세션 18' 절.
 - **세션 17 (2026-10-20): GX GDSC 점검과 CP_PROTECT 33 구현 (커밋 `e6bb304`).** 승인 1·3 구현, 승인 2 (HWCG) 철회. 체인 84/84, `check_s17.py` PASS. 구현 전 QEMU 기준선 부팅 정상 (패닉 없음, 옛 커널과 같은 데이터 어보트 1회). 컴파일과 기기 판독은 미확인. 상세: '세션 17' 절.
 - **세션 16 (분석, 2026-10-20): shim SCM 경로, Linux hw_init 매핑, personality 준비 (코드 변경 없음).** shim에는 SMC(PSCI)만 있고 SCM/PAS 호출은 없다 (경우 2). hw_init 쓰기 약 140개 중 0082가 구현한 것은 19개다. personality는 게이트가 닫혀 있으면 레지스터에 접근하지 않는다. CI `run-39359712049`는 `dec211a`(580e857 포함)에서 PASS, SweetGPU 경고 0. 상세: '세션 16 (분석)' 절.
 - **세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`).** TSB 3개 레지스터와 ADDR_MODE 12개 쓰기를 추가했다 (현재 빌드에서 실행 경로 없음). `readFuse`의 `-Wcast-align`은 warning-only로 정리했다. 체인 84/84, 체크 18/18. 승인 1 (펌웨어 조사)은 폰이 USB에 없어 실행하지 못했다. 승인 4 (NO_UPDATE)는 보류. 상세: '세션 16' 절.
@@ -28,6 +30,111 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 19 (2026-10-20): NO_UPDATE 구현 (승인 2), GX 켜기 설계, A618 GMU 판정, SQE·gpu_region 조사
+
+**전제.** 시작 HEAD `6d3fca4`. 코드 커밋 `a4b0469` (0082 NO_UPDATE). 체인 84/84, personality 0, ADT GPU 0, origin push `DISABLED`. 참조: `~/refs/linux` `c03c1a1`, `~/refs/mesa` `f28352d`. 폰은 이번 세션에 접근하지 않았다 (로컬 조사만). 세션 18 절은 이 문서 커밋에 함께 들어간다.
+
+**Task A (A618 vs A630 GMU 판정).**
+- 칩 ID `0x06010800` = **A618**. 근거: Linux 카탈로그 generic 항목 `.revn = 618` (`a6xx_catalog.c:791`), DT `qcom,chipid = <0x6010800>` (`sweet.dts:17757`), 기기 KGSL `gpu_model = Adreno618v1` (세션 18).
+- GMU 파일명: 카탈로그가 `a630_gmu.bin`을 요구하는 항목은 A615 (`a6xx_catalog.c:737`), A618 (`:767`, `:794`), A630 (`:955`)이다. A619·A621·A623은 자기 이름을 쓴다. **"a630_gmu.bin은 A630 전용"이라는 가정은 카탈로그와 맞지 않는다.**
+- 기기의 GMU 이미지는 `a618_gmu.bin` (32768 B = `0x8000`) 하나뿐이다. KGSL이 이 파일을 로드한다는 로그는 없다 (세션 18: dmesg 롤오버). 이미지에 칩 표식 문자열은 없다.
+- 판정: 이 기기의 GMU는 `a618_gmu.bin`일 가능성이 높다 (**추정**). 업스트림 이름 `a630_gmu.bin`과 같은 이미지인지는 **미확정**.
+- A618은 legacy GMU 경로다. `adreno_is_a630_family`는 GEN1 계열 전체다 (`adreno_gpu.h:515–520`), `a6xx_gmu_init`이 `gmu->legacy = true`를 세운다 (`a6xx_gmu.c:2368`). legacy 로더는 32 KB 상한 (`:881–886`)이고, 기기 파일은 정확히 그 크기다.
+
+**Task B (NO_UPDATE 구현, 커밋 `a4b0469`).**
+- 변경: `CP_RB_CNTL = kRbCntlDefault | kRbCntlNoUpdate` = `0x0800020C`. `kRbCntlNoUpdate = 1u << 27` (Mesa `adreno_common.xml:143`).
+- Linux 근거: `a6xx_gpu.c:1452–1456` (hw_apriv 0이면 NO_UPDATE). hw_apriv는 `ADRENO_QUIRK_HAS_HW_APRIV`에서 온다 (`a6xx_gpu.c:2717–2718`). 두 `0x06010800` 항목 모두 이 플래그가 없다 (`a6xx_catalog.c:762–805`).
+- `MSM_GPU_RB_CNTL_DEFAULT = 0x20C`는 매크로로 다시 계산해 확인했다 (`msm_gpu.h:306–311`: BUFSZ(12) | BLKSZ(2)).
+- **`CP_RB_RPTR_ADDR`는 설정하지 않는다 (변경 없음).** Linux는 `shadow_bo`가 있을 때만 쓴다 (`a6xx_gpu.c:1459–1464`). shadow는 `hw_apriv || has_whereami`일 때만 할당된다 (`:1102–1103`). hw_apriv는 0이고 SQE 검사도 통과하지 못했으므로 (Task D), shadow가 없다.
+- 검증: `check_s19.py` PASS (Mesa 오프셋과 비트, 매크로 재계산, 쓰기 1회, `0x0800020C`, RPTR_ADDR 미기록, 카탈로그의 HAS_HW_APRIV 부재). `check_s17.py` PASS. 체인 84/84, 워크트리 = stage. `tools/test-check-patch-log.sh` 18/18.
+- 미실행: 컴파일 (CI가 한다), 기기 검증.
+- 주의: 이 드라이버는 아직 CP를 기동하지 않는다. CP 기동을 넣을 때 `has_whereami`가 참이면 shadow와 `CP_RB_RPTR_ADDR`를 함께 설계해야 한다.
+
+**Task C (GX 켜기 설계, 문서만. 코드 없음).**
+
+정정 1 (세션 18): **XNU에 RPMh 클라이언트는 있다.** `xnu/patches/0062-sweet-touch-power-battery.patch`의 `bsd/dev/sweet_rpmh.c`는 RSC·TCS 쓰기, cmd-db 조회, L11C 투표를 한다. 그러나 `ldoc11`과 2950–3400 mV만 받는다 (0062 패치 443–444행). **ARC 레벨 자원 `gfx.lvl`은 지원하지 않는다.** 블로커는 "RPMh 부재"가 아니라 "ARC 레벨 투표 미구현"이다.
+
+정정 2 (세션 18의 호스트 직접 3단계): Linux의 GX GDSC `power_on`은 `gdsc_gx_do_nothing_enable`이다 (`drivers/clk/qcom/gdsc.c:714–727`). 호스트는 GDSCR을 쓰지 않고, 부모 레귤레이터 `sc->rsupply`만 켠다. **GX 전원 투입은 GMU 펌웨어가 한다.** 호스트가 GX 헤드스위치를 쓰는 것은 복구 시 끄기뿐이다. 따라서 GDSCR SW_COLLAPSE 해제로 GX를 켜는 방식은 Linux 선례가 없다.
+
+Linux 순서 (A618, legacy GMU):
+1. CX (`gmu->cxpd`, `a6xx_gmu.c:2243`, `:2429`): 호스트가 `gdsc_enable`로 켠다. `gpu_cx_gdsc`에는 `power_on` 재정의가 없다 (`gpucc-sm8150.c`, `.gdscr = 0x106c`, `.gds_hw_ctrl = 0x1540`).
+2. GX (`gmu->gxpd`, `:2259`, `:2456`): `gdsc_gx_do_nothing_enable` → `regulator_enable(VDD_GFX)`. VDD_GFX는 `pm6150_s2_level` (phandle 0x20)이고, 부모는 RPMh ARC `gfx.lvl`이다 (`sweet.dts:12953–12958`).
+3. GMU 적재와 시작: `a6xx_gmu_fw_load` (`a6xx_gmu.c:864`, ITCM 0x0, DTCM 0x40000, 크기 ≤ 0x8000), `a6xx_gmu_start` (`:1045`).
+4. legacy 레일: `a6xx_gmu_gfx_rail_on` (`:529–543`, 호출 `:1050`). BOOT_SLUMBER 옵션, GX/MX vote index, OOB BOOT_SLUMBER. GMU가 GX 헤드스위치를 켠다.
+5. `a6xx_sptprac_enable` (`:1054`): legacy 수동 SP 전원.
+6. 이후 hw_init (지금 0082가 하는 RBBM·CP 쓰기).
+
+XNU 블로커 (설계 항목):
+- B1. VDD_GFX: RPMh ARC `gfx.lvl` 투표 (cmd-db 조회와 ARC 페이로드). 0062 클라이언트에 없다. 참고: refs의 `drivers/regulator/qcom-rpmh-regulator.c`.
+- B2. GMU 레지스터 창 (`0x506a000`, 0x31000; PDC `0xb290000`, `0xb490000`) 미매핑. GMU 적재기, OOB, HFI v1 미구현.
+- B3. CX 호스트 직접 켜기: Linux 선례가 있다 (`gdsc_enable`). 미구현.
+- B4. GX 헤드스위치: GMU가 켠다. 호스트 직접 GDSCR 해제는 선례가 없다. 채택하면 Linux와 다른 위험을 진다.
+
+권장: **GMU 경로 (Linux 동등)**를 설계 목표로 한다. 호스트 직접 GX 경로는 기기 증거 전까지 대안으로만 둔다. 쓰기 구현은 별도 승인이다.
+
+CX 안전성 (세션 18의 gpucc 읽기 질문): Linux는 CX GDSC를 호스트가 켜면서 `gpucc+0x106c`에 쓴다. 이 쓰기는 CX가 꺼진 상태에서 일어난다. 따라서 gpucc 제어 레지스터는 CX 상태와 무관하게 접근 가능하다는 **간접 근거**가 있다. 기기 검증은 아니다 (VERIFY).
+
+**Task D (SQE 형식, gpu_region).**
+- SQE `a630_sqe.fw` (32136 B = 8034 dword). 헤더 4 dword: dw0 = `0x00000000`, dw1 = `0x016ee19a`, dw2 = `0x01001ee1`, dw3 = `0x01190001`. 이후 CP 마이크로코드처럼 보이는 워드 (`0x88020001`, `0xa8020080` …). 꼬리 16 B는 `0x000000c4` 반복 (패딩 가능성, 의미 미확인). 문자열은 없다.
+- Linux 검사식 (`a6xx_gpu.c:1022–1023`): 패치 표식 `(dw0 & 0xf) == 0xa && (dw2 & 0xf) >= 1`, 버전 `(dw0 & 0xfff) >= 0x190`. 기기 SQE는 둘 다 거짓이다 (dw0 = 0). **주석은 버전을 dw[3]에 둔다고 하지만, 코드는 패치 레벨을 dw[2]에서 읽는다.** 주석과 코드가 서로 다르다.
+- 판정: **형식 가정 미확정.** dw0 해석은 불합격이다. dw3 해석 (상위 16비트 0x0119 = 1.19)도 불합격이다. dw1 해석 (하위 12비트 0x19a ≥ 0x190)은 통과할 수 있다 (**가설**). 벤더 SQE를 KGSL이 쓰므로, 업스트림 검사식의 형식 가정이 이 파일과 맞지 않을 가능성이 크다. `has_whereami` 판정은 보류한다. NO_UPDATE는 SQE와 무관하다 (Task B). CP 기동 전에 해결해야 한다.
+- gpu_region 불일치 원인: **DT 오버레이.** `phone-dump/dtbo-1.dts`의 `fragment@67` (`target = <&pil_gpu_mem>`, `reg = <0x00 0x97f15000 0x00 0x2000>`, 5654–5657행)이 0x97715000을 0x97f15000으로 옮긴다. 같은 오버레이가 인접 PIL 영역 두 개도 +0x800000 옮긴다 (`fragment@65` `pil_ipa_fw_mem` 0x97700000→0x97f00000, `fragment@66` `pil_ipa_gsi_mem` 0x97710000→0x97f10000). `fragment@68` (`secure_display_memory`)은 주소가 아니라 크기만 바꾼다 (0x5c00000→0x8c00000, 고정 주소 없는 `shared-dma-pool`). 덤프 `sweet.dts`는 기본 DT이고, 라이브 DT는 오버레이 적용 결과다. **VERIFY**: XNU가 gpu_region을 예약할 때 어느 DT (기본 또는 오버레이 적용)를 쓸지 정한다.
+- 루트 compatible 정정: 덤프의 `qcom,sdmmagpie`는 기본 DT 기준이다. 부팅 DT는 `qcom,sdmmagpie-qrd qcom,sdmmagpie qcom,qrd`다. 어느 쪽에도 `qcom,sm7150`은 없다. 결론은 바뀌지 않는다.
+
+**정정 요약 (세션 18 대비).** (1) RPMh는 있다 (`0062`, ldoc11만). (2) 호스트 직접 GX 3단계는 Linux 선례가 없다. (3) gpu_region 불일치는 오버레이로 설명된다. (4) gpucc 읽기 안전성 우려는 Linux의 CX 쓰기 선례로 부분적으로 줄었으나, 기기 검증 전까지 미확정이다. (5) 세션 16의 "SQE 필요" 보류는 NO_UPDATE에 해당하지 않는다.
+
+**커밋.** 코드 `a4b0469` (0082 NO_UPDATE). 문서: 이 절, 세션 18 절, CI-PRECHECK 세션 19 절 (이 커밋).
+
+**sweetgpu=1 금지 유지.** 하드웨어 부팅 없음. personality와 ADT GPU 노드 없음.
+
+### 세션 18 (2026-10-20): 폰 read-only 조사, zap 재분석, 승인 요청 (코드·커밋 변경 없음, 문서 미커밋)
+
+**전제.** HEAD `6d3fca4`, 체인 84/84, 작업 트리 clean (시작 시), origin push `DISABLED`, personality 0, ADT GPU 0. 참조: `~/refs/linux` `c03c1a1`, `~/refs/mesa` `f28352d`. 기기는 연결되어 있고 Magisk root (`su -c id` uid 0). 폰에는 쓰지 않았다 (`adb shell` 읽기 명령만). `adb pull`은 SELinux로 거부되어, root의 `base64` 출력을 PC에서 디코드해 복사했다. 기기 식별자는 이 문서에 적지 않는다.
+
+**Task B (폰 read-only 조사).**
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| SQE `a630_sqe.fw` | 있음, 32136 B, PC 복사 `phone-dump/firmware/sqe_gmu/` | `/vendor/firmware/` |
+| GMU | `a618_gmu.bin` 32768 B만 있음 (Linux는 `a630_gmu.bin`을 요구) | `/vendor/firmware/`, `a6xx_catalog.c:767,794` |
+| zap | `a615_zap.{mdt,b00,b01,b02,elf}` 있음. 세션 11 사본과 sha256 동일 | 해시 비교 |
+| SQE 검사 (Linux) | 실패: dw0 = 0, 패치 표식 없음, 버전 0 < 0x190 → `-EPERM` | `a6xx_gpu.c:1011–1027, 1072–1077` (`python3 -I`로 계산) |
+| KGSL | 살아 있음. Adreno618v1, gpuclk 140 MHz (설정값), busy 0 %, governor `msm-adreno-tz`, reset_count 269→274, hwcg=1, ifpc=1 | `/sys/class/kgsl/kgsl-3d0` |
+| `gpu_gx_gdsc` | disabled | `/sys/class/regulator` |
+| `gpu_cx_gdsc` | disabled | 같음 |
+| `pm6150_s2_level` (GX 부모, VDD_GFX) | disabled | 같음 (DT phandle 0x20) |
+| `pm6150l_s2_level` (CX 부모) | enabled | 같음 (DT phandle 0x1d) |
+| 대조: `usb30_prim_gdsc` | enabled | 같음 |
+| zap subsystem | `a615_zap` ONLINE | `/sys/bus/msm_subsys/devices/subsys6` |
+| dmesg | 30852줄, 타임스탬프 40428–42645 s (부팅 후 약 11시간 이후). KGSL·GDSC·zap·pil 줄 0건 | 부팅 초기 로그 소실 |
+| GX 부팅 시 상태 | **미확정** (추정: off) | Android idle에서 GX·CX·VDD_GFX 모두 off. 부팅 시점 증거 없음 |
+
+라이브 DT: root compatible `qcom,sdmmagpie-qrd qcom,sdmmagpie qcom,qrd` (`qcom,sm7150` 없음). `gpu_region` 노드 이름은 `@97715000`인데 reg는 `0x97f15000` (크기 `0x2000`)이다. 덤프의 reg는 `0x97715000` (xor `0x800000`). 불일치, 원인 미확정.
+
+**Task C (zap 로드 주체 판정).**
+- Linux (이 DT): `zap-shader` child 노드가 없어서 `zap_shader_load_mdt`가 `-ENODEV`를 반환한다 (`adreno_gpu.c:49–52`, child 검사가 fwname 사용보다 먼저). hw_init은 `-ENODEV`일 때 `RBBM_SECVID_TRUST_CNTL = 0`을 쓴다 (`a6xx_gpu.c:1507–1517`). 0082의 no-zap 경로와 같다.
+- 선택 항목 (`a6xx_catalog.c:789–805`)에는 `.zapfw`가 없다. `a615_zap.mbn` (774행)은 `sm7150` 항목 것이고, 기기에는 `.mdt` 형식만 있다.
+- Android: `pil_gpu: qcom,kgsl-hyp` (`compatible = "qcom,pil-tz-generic"`, `qcom,pas-id = <0x0d>`, `qcom,firmware-name = "a615_zap"`, 덤프 17674–17678, 라이브 DT에서도 확인), 예약 영역 `gpu_region` (`no-map`). subsystem `a615_zap`이 ONLINE이다.
+- 판정: zap은 Android 커널의 PIL (`pil-tz-generic`)이 올리고, SCM을 통해 TZ가 인증한다. XBL·ABL 관여의 증거는 없다 (확정 아님). SCM 호출 자체는 관측하지 않았다.
+- XNU: SCM 경로가 없다 (shim의 SMC는 PSCI 전용, 세션 16). zap을 올릴 수 없으므로 no-zap이 Linux와 같은 동작이다. 보안 모드는 zap이 필요하다. 비보안 bring-up에는 필수가 아니다.
+
+**정정 (세션 17 문서).**
+1. HWCG 철회의 근거는 Linux 기준이다. Android KGSL은 `hwcg=1`로 HWCG를 켠다. 기능 필수는 아니지만, "기기가 HWCG를 쓰지 않는다"는 뜻은 아니다.
+2. NO_UPDATE: 세션 16은 "SQE 필요"로 보류했다. 그러나 Linux는 `hw_apriv = 0`이면 SQE와 무관하게 NO_UPDATE를 세운다 (`a6xx_gpu.c:1452–1456`; `hw_apriv`는 `:2717–2718`). 0082는 `0x20C`를 쓰고 `CP_RB_RPTR_ADDR`를 설정하지 않는다. CP가 돌기 시작하면 설정되지 않은 주소로 RPTR 섀도 쓰기가 일어날 수 있다. 지금은 CP를 기동하지 않으므로 활성 위험은 없다. CP 기동 변경 전에 고쳐야 한다.
+3. GDSC 점검 (`e6bb304`)의 "gpucc 읽기는 안전하다"는 가정은 미검증이다. Android idle에서 CX (`gpu_cx_gdsc`)는 disabled다. gpucc가 CX에 속하는지는 DT로 확인되지 않는다 (`power-domains` 없음). 하드웨어 부팅 전에 반드시 확인해야 한다.
+4. GX 켜기는 GDSC만으로 되지 않는다. GX GDSC의 부모는 `pm6150_s2_level` (VDD_GFX)이고 현재 disabled다. RPMh 레벨 투표가 필요하다.
+5. GMU 파일명: Linux는 `a630_gmu.bin`을 요구하고 기기에는 `a618_gmu.bin`만 있다. Linux 기준으로는 GMU 로드가 실패한다.
+6. SQE 검사 실패 (`-EPERM`): 기기 SQE가 Linux 검사식을 통과하지 못한다. 파일 형식 가정 (dw0 = 버전)이 틀렸을 수 있다. `has_whereami` 판정은 보류한다. CP 기동 전에 해결해야 한다.
+
+**Task D (승인 요청, 대기).**
+1. GX 켜기 경로: 설계 승인, 쓰기는 금지 유지. 항목은 VDD_GFX (RPMh 레벨), GX GDSCR SW_COLLAPSE 해제, `core_root_clk`, GMU 경로와 호스트 직접 경로 중 선택, CX 상태 확인. 하드웨어 쓰기는 별도 승인.
+2. NO_UPDATE: 권장 승인. `CP_RB_CNTL = 0x0800020C` (DEFAULT | NO_UPDATE). SQE 판정과 무관. CP 기동 변경과 함께 적용 (별도 승인).
+3. zap: 권장은 no-zap 유지 확정 (Linux와 같은 동작, 코드 변경 없음). SCM/PAS 설계는 보류 (별도 세션).
+
+**커밋.** 없음. 이 문서 변경만 미커밋이다 (`git status`: NOTES.md). 세션 19에서 승인 결과와 함께 커밋한다.
+
+**sweetgpu=1 금지 유지.** personality와 ADT GPU 노드는 없고, 하드웨어 부팅도 없었다.
 
 ### 세션 17 (2026-10-20): GX GDSC 점검과 CP_PROTECT 33 구현 (승인 1·3), HWCG 철회 (커밋 `e6bb304`)
 

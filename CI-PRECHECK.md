@@ -262,3 +262,25 @@ grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
 - 판정: `POST_CI_VERDICT: PASS (exit 0)`이면 PASS. 그 외는 `CI-FAILURE-PLAYBOOK.md`를 따른다.
 - 컴파일 PASS는 실행 안전성을 뜻하지 않는다. `sweetgpu=1` 하드웨어 테스트는 금지 유지다.
 - 아티팩트 `xnu-kernel`을 `kernel-artifact-new/`에 받은 뒤 QEMU 스모크를 다시 돌린다 (`mkadt.py OUT.adt --qemu` → `mkpayload.py KERNEL OUT.adt PAYLOAD --cmdline "..."` → `qemu-sweet.py PAYLOAD OUTDIR --secs 60 --fail-on-panic`).
+
+## 세션 19: NO_UPDATE (커밋 a4b0469)
+
+- 코드: `a4b0469`. `CP_RB_CNTL = 0x0800020C` (`kRbCntlDefault | kRbCntlNoUpdate`). 근거: Linux `a6xx_gpu.c:1452-1456`, hw_apriv 0 (`a6xx_catalog.c:762-805`에 HAS_HW_APRIV 없음). `CP_RB_RPTR_ADDR`는 쓰지 않는다 (shadow 없음, `a6xx_gpu.c:1459-1464`).
+- 검증 (이 머신): 체인 84/84, `check_s19.py` PASS, `check_s17.py` PASS, `tools/test-check-patch-log.sh` 18/18. 컴파일은 이 머신에서 하지 않았다 (CI 몫).
+- 기대 CI 결과: `POST_CI_VERDICT: PASS (exit 0)`, `SweetGPU.cpp` 경고 0.
+- 푸시 범위: `dec211a..HEAD` = `2a53f73`, `e6bb304`, `6d3fca4`, `a4b0469`, 이번 문서 커밋 (5개).
+
+```sh
+cd ~/projects/ios-sweet
+git status --short                                   # 비어 있어야 한다 (kernel-artifact-new/는 .gitignore가 무시한다)
+git ls-remote fork refs/heads/ci-validate/v1         # dec211a여야 한다 (아니면 멈추고 확인)
+git push fork HEAD:ci-validate/v1                    # 기대: dec211a..HEAD, fast-forward, 5커밋
+gh workflow run xnu.yml -R PalanBanana/ios-sweet --ref ci-validate/v1 \
+  -f macos_version=13.5 -f kernel_config=DEVELOPMENT -f machine_config=SWEET -f keep_going=true
+gh run list -R PalanBanana/ios-sweet --workflow xnu.yml --limit 3    # RUN_ID 확인
+gh run view <RUN_ID> -R PalanBanana/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID>.txt
+./tools/post-ci-analyze.sh ~/ios-sweet-ci/run-<RUN_ID>.txt
+grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
+```
+
+- 이 push에서 CI가 GDSC 점검, CP_PROTECT 33, NO_UPDATE를 처음으로 컴파일한다. 컴파일 PASS는 실행 안전성을 뜻하지 않는다. `sweetgpu=1` 하드웨어 테스트는 금지 유지다.
