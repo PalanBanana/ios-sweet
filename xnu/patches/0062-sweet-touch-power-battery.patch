@@ -109,11 +109,12 @@
      "     'IOClass'         = IOPanicPlatform;"
 --- /dev/null
 +++ b/bsd/dev/sweet_rpmh.c
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,437 @@
 +/*
 + * SWEET PM6150L L11C bring-up; see report.md for DT and source evidence.
 + * Sole XNU apps-DRV owner, called from thread context with deep idle disabled.
 + * No sleep/wake programming, SPMI writes, GIC handler, or timeout recovery.
++ * sweetrpmhq=1 (boot-arg, exact value 1) adds a read-only ARC query after the vote.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <sys/param.h>
@@ -121,6 +122,7 @@
 +#include <sys/errno.h>
 +#include <kern/clock.h>
 +#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
 +
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 +int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
@@ -156,6 +158,8 @@
 +#define RH_DB_ENTRY     24u
 +#define RH_DB_MAX       0x100000u /* policy bound, not a DT size */
 +#define RH_VRM          4u
++#define RH_ARC          3u       /* CMD_DB_HW_ARC (cmd-db.h): ARC level resources, e.g. gfx.lvl */
++#define RH_ARC_QUERY_MAX 32u     /* aux values printed per resource by the sweetrpmhq=1 query */
 +#define RH_TIMEOUT_US   100000u
 +
 +static vm_offset_t rh_rsc, rh_tcs, rh_dict, rh_db;
@@ -436,6 +440,79 @@
 +	return 0;
 +}
 +
++/*
++ * sweetrpmhq=1: read-only query of the ARC level resources. It walks the same cmd-db
++ * headers as rh_lookup, but accepts the ARC slave (3) and prints the aux level table.
++ * It writes nothing: no RSC, TCS or cmd-db store is touched.
++ */
++static int
++rh_arc_query_one(const char *res)
++{
++	uint32_t key[2] = {0, 0};
++	for (unsigned i = 0; i < 8 && res[i]; ++i) {
++		key[i / 4] |= (uint32_t)(uint8_t)res[i] << (8u * (i % 4));
++	}
++	unsigned matches = 0;
++	for (unsigned i = 0; i < 8; ++i) {
++		uint32_t h = 8u + 16u * i;
++		unsigned slave = rh_db16(h);
++		if (!slave) {
++			break;
++		}
++		uint32_t entries = RH_DB_HEADER + rh_db16(h + 2);
++		uint32_t aux = RH_DB_HEADER + rh_db16(h + 4);
++		unsigned count = rh_db16(h + 6);
++		if (slave < 3 || slave > 5 || (entries & 3u) ||
++		    !rh_range(entries, count * RH_DB_ENTRY) || !rh_range(aux, 0)) {
++			printf("SWEET RPMH ARC: malformed cmd-db slave header %u\n", i);
++			return EINVAL;
++		}
++		for (unsigned j = 0; j < count; ++j) {
++			uint32_t e = entries + RH_DB_ENTRY * j;
++			if (rh_read(rh_db, e) != key[0] || rh_read(rh_db, e + 4) != key[1]) {
++				continue;
++			}
++			++matches;
++			uint32_t addr = rh_read(rh_db, e + 16);
++			unsigned auxlen = rh_db16(e + 20);
++			uint32_t auxoff = aux + rh_db16(e + 22);
++			printf("SWEET RPMH ARC: %s addr=%#x slave=%u aux-len=%u priority=%#x:%#x%s\n",
++			    res, addr, slave, auxlen, rh_read(rh_db, e + 8), rh_read(rh_db, e + 12),
++			    (slave == RH_ARC && (addr >> 16) == RH_ARC) ? "" : " (not the ARC format)");
++			if (!rh_range(auxoff, auxlen)) {
++				printf("SWEET RPMH ARC: %s aux table out of range\n", res);
++				continue;
++			}
++			for (unsigned k = 0; k < auxlen / 2 && k < RH_ARC_QUERY_MAX; ++k) {
++				printf("SWEET RPMH ARC: %s aux[%u]=%#x\n", res, k,
++				    (uint32_t)rh_db16(auxoff + 2 * k));
++			}
++		}
++	}
++	if (matches != 1) {
++		printf("SWEET RPMH ARC: %s lookup matches=%u\n", res, matches);
++		return ENODEV;
++	}
++	return 0;
++}
++
++static void
++sweet_rpmh_arc_query(void)
++{
++	int64_t value = 0;
++	if (!PE_parse_boot_argn("sweetrpmhq", &value, (int)sizeof(value)) || value != 1) {
++		return;
++	}
++	if (rh_poisoned || !rh_db) {
++		printf("SWEET RPMH ARC: query skipped (poisoned or cmd-db not mapped)\n");
++		return;
++	}
++	static const char *const names[] = { "gfx.lvl", "cx.lvl", "mx.lvl" };
++	for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
++		(void)rh_arc_query_one(names[n]);
++	}
++}
++
 +int
 +sweet_rpmh_vreg_enable(const char *res, unsigned mv)
 +{
@@ -465,6 +542,8 @@
 +		printf("SWEET RPMH: enable failed errno=%d\n", error);
 +	}
 +	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
++	/* Read-only diagnostics: a no-op unless sweetrpmhq=1. Runs after the lock is released. */
++	sweet_rpmh_arc_query();
 +	return error;
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
