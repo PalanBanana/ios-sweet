@@ -1,20 +1,23 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,89 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
 + * Values come from sweet.dts (GPU node, lines 17748-18197; cited in SweetGPU.cpp)
 + * and from Mesa a6xx.xml and Linux a6xx_gpu.c. start() maps the GPU window
 + * only. With boot-arg sweetgpu=1 it also maps cx_dbgc, cx_misc and qfprom,
-+ * reads the speed bin from qfprom, and writes RBBM and CP registers (reset,
-+ * interrupt mask, SECVID, ring base). No zap is loaded. The
++ * maps gpucc by physical address to read the GX GDSC (reads only), reads the
++ * speed bin from qfprom, and writes RBBM and CP registers (reset, interrupt
++ * mask, SECVID, ring base, CP_PROTECT). No zap is loaded. The
 + * DT zap node is not a child of the GPU node, so Linux takes its -ENODEV path
 + * for this DT, and this driver does the same.
 + *
-+ * 미확정: clocks and GDSC rails, GBIF/LLCC, SMMU, CP start, 64-bit address
-+ * mode, frame submission. No IOKit personality matches this class, so start()
-+ * runs only if the class is instantiated explicitly.
++ * 미확정: clocks, GX power-up (the GDSC is only read), GBIF/LLCC, SMMU, CP
++ * start, 64-bit address mode, frame submission. HWCG is not written: Linux
++ * does not apply a615_hwcg on this DT (adreno_device.c:56). No IOKit
++ * personality matches this class, so start() runs only if the class is
++ * instantiated explicitly.
 + */
 +#ifndef _SWEET_GPU_ADRENO618_H_
 +#define _SWEET_GPU_ADRENO618_H_
@@ -40,8 +43,10 @@
 +	IOMemoryMap                 *fCxDbgc;       /* reg window 1: cx_dbgc */
 +	IOMemoryMap                 *fCxMisc;       /* reg window 2: cx_misc */
 +	IOMemoryMap                 *fQfprom;       /* reg window 3: qfprom (fuses) */
++	IOMemoryMap                 *fGpucc;        /* gpucc, mapped by physical address (GX GDSC), not an ADT window */
 +	volatile uint32_t           *fRegs;         /* GPU block, dword indices */
 +	volatile uint32_t           *fQfpromRegs;   /* qfprom, dword indices (readFuse passes byteOff / 4) */
++	volatile uint32_t           *fGpuccRegs;    /* gpucc, byte offsets from kGpuccPA (readGpucc passes byteOff / 4) */
 +	IOBufferMemoryDescriptor    *fRingBuf;      /* 32 KiB ring, physically contiguous */
 +	const SweetGpuPwrBin        *fPwrBin;       /* table selected by speed bin */
 +	uint32_t                    fSpeedBin;
@@ -55,10 +60,14 @@
 +	uint32_t readReg(uint32_t idx);
 +	void     writeReg(uint32_t idx, uint32_t val);
 +	uint32_t readFuse(uint32_t byteOff);
++	uint32_t readGpucc(uint32_t byteOff);
 +	bool     mapWindow(IOService *provider, uint32_t index, uint64_t minBytes,
 +	    IOMemoryMap **map, const char *name);
++	bool     mapPhysical(uint64_t pa, uint64_t minBytes, IOMemoryMap **map,
++	    const char *name);
 +	void     teardown(void);
 +
++	IOReturn checkGxPowered(void);
 +	IOReturn powerUpSequence(void);
 +	IOReturn initRingbuffer(void);
 +	IOReturn loadZapFirmware(void);
@@ -83,7 +92,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,463 @@
+@@ -0,0 +1,626 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -100,6 +109,7 @@
 +#include <IOKit/IOMapper.h>
 +#include <libkern/libkern.h>
 +#include <kern/clock.h>
++#include <kern/task.h>
 +#include <pexpert/pexpert.h>
 +#include "SweetGPU.h"
 +
@@ -210,6 +220,8 @@
 +	kCpIntCntl           = 0x01f2,  /* adreno_common.xml:184 CP_INT_CNTL (not redefined in a6xx.xml) */
 +	kCpMeCntl            = 0x01f6,  /* adreno_common.xml:197 CP_ME_CNTL */
 +	kCpMeStatus          = 0x01f7,  /* adreno_common.xml:201 CP_ME_STATUS */
++	kCpProtectCntl       = 0x084F,  /* a6xx.xml:281 CP_PROTECT_CNTL */
++	kCpProtectBase       = 0x0850,  /* a6xx.xml:294 CP_PROTECT array, stride 1, length 32 */
 +};
 +
 +/* a6xx.xml:554 RBBM_STATUS bit 0 = CP_AHB_BUSY_CX_MASTER (ignored for idle) */
@@ -217,6 +229,71 @@
 +
 +/* a5xx_address_mode ADDR_64B (adreno_common.xml:390): value for the TSB and ADDR_MODE writes. */
 +static const uint32_t kAddrMode64 = 1;
++
++/*
++ * CP_PROTECT_CNTL = ACCESS_PROT_EN (bit 0) | ACCESS_FAULT_ON_VIOL_EN (bit 1) |
++ * LAST_SPAN_INF_RANGE (bit 3). a6xx.xml:275-279, Linux a6xx_gpu.c:734-737.
++ */
++static const uint32_t kCpProtectCntlVal = 0xB;
++static const uint32_t kCpProtectCount = 32;     /* a6xx.xml:294 length 32 */
++
++/*
++ * GX GDSC status, read only (Linux gdsc.c). sweet.dts:6172-6186 gpu_gx_gdsc, reg
++ * 0x509100c = gpucc + 0x100c (gpucc-sm8150.c:233 .gdscr = 0x100c). Its node has
++ * qcom,poll-cfg-gdscr (sweet.dts:6176), so Linux reads the status from CFG_GDSCR,
++ * GDSCR + 0x4 (gdsc.c:67-68), and tests GDSC_POWER_UP_COMPLETE there (gdsc.c:78-81).
++ * PWR_ON (bit 31) is the status of a non-polling GDSC (gdsc.c:89).
++ */
++static const uint64_t kGpuccPA = 0x5090000;    /* sweet.dts:634 gpucc reg base */
++static const uint64_t kGpuccBytes = 0x1014;    /* covers CFG_GDSCR at 0x1010 */
++static const uint32_t kGdscOff = 0x100C;       /* GX GDSCR, offset from kGpuccPA */
++static const uint32_t kGdscCfgOff = 0x1010;    /* CFG_GDSCR = GDSCR + CFG_GDSCR_OFFSET (gdsc.c:35) */
++static const uint32_t kGdscPwrOn = 1u << 31;   /* PWR_ON_MASK (gdsc.c:21) */
++static const uint32_t kGdscPowerUpComplete = 1u << 16;   /* GDSC_POWER_UP_COMPLETE (gdsc.c:32) */
++static_assert(kGdscOff % 4 == 0 && kGdscCfgOff % 4 == 0, "gpucc GDSC offsets must be 4-byte aligned");
++static_assert(kGdscCfgOff == kGdscOff + 4, "CFG_GDSCR is GDSCR + 0x4 (gdsc.c:35)");
++
++/*
++ * a630_protect_regs (Linux a6xx_catalog.c:508-541), the table of both 0x06010800
++ * catalog entries (a6xx_catalog.c:777, :802). A6XX_PROTECT_RDONLY = len << 18 | reg,
++ * A6XX_PROTECT_NORDWR = 1 << 31 | len << 18 | reg (a6xx_gpu.h:228-238). Entry 31 is
++ * the infinite last span. Linux skips zero values (a6xx_gpu.c:741); none is zero.
++ * The values are generated from the catalog macros.
++ */
++static const uint32_t kCpProtectRegs[kCpProtectCount] = {
++	0x13fc0000, /* RDONLY 0x00000 len 0x04ff, a6xx_catalog.c:509 */
++	0x00140501, /* RDONLY 0x00501 len 0x0005, a6xx_catalog.c:510 */
++	0x0bd0050b, /* RDONLY 0x0050b len 0x02f4, a6xx_catalog.c:511 */
++	0x8000050e, /* NORDWR 0x0050e len 0x0000, a6xx_catalog.c:512 */
++	0x80000510, /* NORDWR 0x00510 len 0x0000, a6xx_catalog.c:513 */
++	0x80000534, /* NORDWR 0x00534 len 0x0000, a6xx_catalog.c:514 */
++	0x82080800, /* NORDWR 0x00800 len 0x0082, a6xx_catalog.c:515 */
++	0x802008a0, /* NORDWR 0x008a0 len 0x0008, a6xx_catalog.c:516 */
++	0x809008ab, /* NORDWR 0x008ab len 0x0024, a6xx_catalog.c:517 */
++	0x02b808de, /* RDONLY 0x008de len 0x00ae, a6xx_catalog.c:518 */
++	0x81340900, /* NORDWR 0x00900 len 0x004d, a6xx_catalog.c:519 */
++	0x89c8098d, /* NORDWR 0x0098d len 0x0272, a6xx_catalog.c:520 */
++	0x80040e00, /* NORDWR 0x00e00 len 0x0001, a6xx_catalog.c:521 */
++	0x80300e03, /* NORDWR 0x00e03 len 0x000c, a6xx_catalog.c:522 */
++	0x830c3c00, /* NORDWR 0x03c00 len 0x00c3, a6xx_catalog.c:523 */
++	0x7ffc3cc4, /* RDONLY 0x03cc4 len 0x1fff, a6xx_catalog.c:524 */
++	0x873c8630, /* NORDWR 0x08630 len 0x01cf, a6xx_catalog.c:525 */
++	0x80008e00, /* NORDWR 0x08e00 len 0x0000, a6xx_catalog.c:526 */
++	0x80008e08, /* NORDWR 0x08e08 len 0x0000, a6xx_catalog.c:527 */
++	0x807c8e50, /* NORDWR 0x08e50 len 0x001f, a6xx_catalog.c:528 */
++	0x876c9624, /* NORDWR 0x09624 len 0x01db, a6xx_catalog.c:529 */
++	0x80049e70, /* NORDWR 0x09e70 len 0x0001, a6xx_catalog.c:530 */
++	0x861c9e78, /* NORDWR 0x09e78 len 0x0187, a6xx_catalog.c:531 */
++	0x873ca630, /* NORDWR 0x0a630 len 0x01cf, a6xx_catalog.c:532 */
++	0x8000ae02, /* NORDWR 0x0ae02 len 0x0000, a6xx_catalog.c:533 */
++	0x8cbcae50, /* NORDWR 0x0ae50 len 0x032f, a6xx_catalog.c:534 */
++	0x8000b604, /* NORDWR 0x0b604 len 0x0000, a6xx_catalog.c:535 */
++	0x8004be02, /* NORDWR 0x0be02 len 0x0001, a6xx_catalog.c:536 */
++	0xdf7cbe20, /* NORDWR 0x0be20 len 0x17df, a6xx_catalog.c:537 */
++	0xaffcf000, /* NORDWR 0x0f000 len 0x0bff, a6xx_catalog.c:538 */
++	0x7ffcfc00, /* RDONLY 0x0fc00 len 0x1fff, a6xx_catalog.c:539 */
++	0x80011c00, /* NORDWR 0x11c00 len 0x0000, a6xx_catalog.c:540 */
++};
 +
 +static const SweetGpuPwrBin *
 +selectPwrBin(uint32_t speedBin)
@@ -245,6 +322,12 @@
 +	return fQfpromRegs[byteOff / 4];
 +}
 +
++uint32_t MsmGpuAdreno618::readGpucc(uint32_t byteOff)
++{
++	/* byteOff is the byte offset from kGpuccPA. It is 4-byte aligned (static_assert above), so byteOff / 4 is exact. */
++	return fGpuccRegs[byteOff / 4];
++}
++
 +bool MsmGpuAdreno618::mapWindow(IOService *provider, uint32_t index, uint64_t minBytes,
 +    IOMemoryMap **map, const char *name)
 +{
@@ -267,6 +350,35 @@
 +	return true;
 +}
 +
++bool MsmGpuAdreno618::mapPhysical(uint64_t pa, uint64_t minBytes, IOMemoryMap **map,
++    const char *name)
++{
++	/*
++	 * Mapping does not touch the hardware. The map keeps the descriptor alive, so
++	 * the descriptor reference is dropped here.
++	 */
++	IOMemoryDescriptor *desc = IOMemoryDescriptor::withPhysicalAddress(pa, minBytes, kIODirectionInOut);
++	if (!desc) {
++		printf("SWEET GPU: %s pa=%#llx descriptor failed\n", name, (unsigned long long)pa);
++		return false;
++	}
++	*map = desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapInhibitCache);
++	OSSafeReleaseNULL(desc);
++	if (!*map) {
++		printf("SWEET GPU: %s pa=%#llx map failed\n", name, (unsigned long long)pa);
++		return false;
++	}
++	if ((*map)->getLength() < minBytes) {
++		printf("SWEET GPU: %s pa=%#llx maps %llu bytes, need %llu\n", name, (unsigned long long)pa,
++		    (unsigned long long)(*map)->getLength(), (unsigned long long)minBytes);
++		OSSafeReleaseNULL(*map);
++		return false;
++	}
++	printf("SWEET GPU: %s pa=%#llx va=%p len=%llu\n", name, (unsigned long long)pa,
++	    (void *)(*map)->getVirtualAddress(), (unsigned long long)(*map)->getLength());
++	return true;
++}
++
 +bool MsmGpuAdreno618::init(OSDictionary *dict)
 +{
 +	if (!super::init(dict)) {
@@ -276,8 +388,10 @@
 +	fCxDbgc = NULL;
 +	fCxMisc = NULL;
 +	fQfprom = NULL;
++	fGpucc = NULL;
 +	fRegs = NULL;
 +	fQfpromRegs = NULL;
++	fGpuccRegs = NULL;
 +	fRingBuf = NULL;
 +	fPwrBin = NULL;
 +	fSpeedBin = 0;
@@ -323,6 +437,16 @@
 +		return false;
 +	}
 +	fQfpromRegs = (volatile uint32_t *)fQfprom->getVirtualAddress();
++
++	/*
++	 * gpucc is not an ADT window of this node, so it is mapped by address and the ADT
++	 * stays unchanged. Mapping alone is not a register access.
++	 */
++	if (!mapPhysical(kGpuccPA, kGpuccBytes, &fGpucc, "gpucc (GX GDSC)")) {
++		teardown();
++		return false;
++	}
++	fGpuccRegs = (volatile uint32_t *)fGpucc->getVirtualAddress();
 +
 +	/* Speed bin: a read of qfprom fuses, not of the GPU block. */
 +	fSpeedBin = (readFuse(kSpeedBinOff) & kSpeedBinMask) >> kSpeedBinShift;
@@ -386,12 +510,14 @@
 +		fIrqRegistered = false;
 +	}
 +	OSSafeReleaseNULL(fRingBuf);
++	OSSafeReleaseNULL(fGpucc);
 +	OSSafeReleaseNULL(fQfprom);
 +	OSSafeReleaseNULL(fCxMisc);
 +	OSSafeReleaseNULL(fCxDbgc);
 +	OSSafeReleaseNULL(fMmio);
 +	fRegs = NULL;
 +	fQfpromRegs = NULL;
++	fGpuccRegs = NULL;
 +	fPwrBin = NULL;
 +}
 +
@@ -420,8 +546,44 @@
 +	return false;
 +}
 +
++IOReturn MsmGpuAdreno618::checkGxPowered(void)
++{
++	/*
++	 * Reads only. The judgement is GDSC_POWER_UP_COMPLETE in CFG_GDSCR. PWR_ON in
++	 * GDSCR must agree. A disagreement (a transition in progress, or a wrong window)
++	 * is refused as well.
++	 */
++	if (!fGpuccRegs) {
++		return kIOReturnNotReady;
++	}
++	uint32_t cfg = readGpucc(kGdscCfgOff);
++	uint32_t pwr = readGpucc(kGdscOff);
++	bool ready = (cfg & kGdscPowerUpComplete) != 0;
++	bool on = (pwr & kGdscPwrOn) != 0;
++	printf("SWEET GPU: GX GDSC CFG_GDSCR=%#x (power-up complete %d), GDSCR=%#x (PWR_ON %d)\n",
++	    cfg, (int)ready, pwr, (int)on);
++	if (ready != on) {
++		printf("SWEET GPU: GX GDSC readings disagree; no writes\n");
++		return kIOReturnError;
++	}
++	if (!ready) {
++		printf("SWEET GPU: GX rail off; no writes\n");
++		return kIOReturnOffline;
++	}
++	return kIOReturnSuccess;
++}
++
 +IOReturn MsmGpuAdreno618::powerUpSequence(void)
 +{
++	/*
++	 * The first GX access of this driver. Nothing below runs unless the GX GDSC
++	 * reads as powered. checkGxPowered writes nothing.
++	 */
++	IOReturn gx = checkGxPowered();
++	if (gx != kIOReturnSuccess) {
++		return gx;
++	}
++
 +	/*
 +	 * RBBM_SW_RESET_CMD assert, then deassert, with readback (a6xx_gpu.c:2128-2130).
 +	 * 미확정: Linux runs this only in a6xx_recover, for gmu-wrapper and rgmu parts
@@ -455,6 +617,16 @@
 +	writeReg(kSpAddrModeCntl, kAddrMode64);
 +	writeReg(kTpl1AddrModeCntl, kAddrMode64);
 +	writeReg(kRbbmSecvidTsbAddrModeCntl, kAddrMode64);
++
++	/*
++	 * CP_PROTECT (a6xx_gpu.c:723-746). Linux writes it after the hw_init ADDR_MODE
++	 * block and before RBBM_INT_0_MASK (a6xx_gpu.c:1384, 1436). CNTL first, then the
++	 * 32 entries in order, entry 31 last: the infinite span (a6xx_gpu.c:744-745).
++	 */
++	writeReg(kCpProtectCntl, kCpProtectCntlVal);
++	for (uint32_t i = 0; i < kCpProtectCount; i++) {
++		writeReg(kCpProtectBase + i, kCpProtectRegs[i]);
++	}
 +
 +	/*
 +	 * 0 masks every RBBM_INT_0 source (a6xx_gpu.c:1849, the hang path). Linux
