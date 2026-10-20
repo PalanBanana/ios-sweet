@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`).** TSB 3개 레지스터와 ADDR_MODE 12개 쓰기를 추가했다 (현재 빌드에서 실행 경로 없음). `readFuse`의 `-Wcast-align`은 warning-only로 정리했다. 체인 84/84, 체크 18/18. 승인 1 (펌웨어 조사)은 폰이 USB에 없어 실행하지 못했다. 승인 4 (NO_UPDATE)는 보류. 상세: '세션 16' 절.
 - **세션 15 (2026-10-20): CI PASS 확정 (run `39350775805`).** 빌드 커밋 `ad20b73` (0082 재작성 `f6bdb2b`·`a42cd8b` 포함)이 컴파일과 링크를 통과했다. 아티팩트 3종. 코드 변경 없음. 승인 대기: 펌웨어 조사, TSB 3개, ADDR_MODE 12개. 상세: '세션 15' 절.
 - **세션 14 (2026-10-20): CI 미실행 (Case N).** fork `ci-validate/v1`은 여전히 `fd539b9`이고 새 run 로그가 없다. 코드 변경 없음. NO_UPDATE의 의미를 정정했다 (하드웨어 RPTR 섀도를 끄는 비트다). TSB/ADDR_MODE 적용 초안은 승인 전까지 적용하지 않는다. 상세: 아래 '세션 14' 절.
 - **세션 13 (2026-10-20): CI 준비와 연구.** 코드 변경 없음. push는 `git push fork HEAD:ci-validate/v1`이다 (로컬 `ci-validate/v1`은 `fd539b9`라서 `git push fork ci-validate/v1`은 아무것도 보내지 않는다). CI는 수동 `workflow_dispatch`다. NO_UPDATE 불일치 (0082 `0x20C`, Linux `0x0800020C`)와 TSB/ADDR_MODE 표는 세션 14 입력이다. 상세: 아래 '세션 13' 절.
@@ -25,6 +26,33 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`), 펌웨어 조사는 폰 미연결로 보류
+
+**승인 결과.**
+- 승인 1 (펌웨어 조사, read-only): **실행하지 못했다.** 폰이 USB에 연결되어 있지 않다. `adb devices`에 기기가 없고 (`adb get-state`: no devices/emulators found), `lsusb`에도 Xiaomi·Qualcomm 장치가 없다 (ADB, fastboot, EDL 모두 아님). 이 세션에서 기기에 접근하지 않았다. 연결 후 다시 요청한다.
+- 승인 2+3 (TSB 3개 레지스터, ADDR_MODE 12개): 커밋 `580e857`.
+- `readFuse`의 `-Wcast-align` 정리: 같은 커밋 (승인 조건을 아래 검증으로 충족).
+- 승인 4 (NO_UPDATE): 보류. 구현하지 않았다.
+
+**구현** (스테이지 소스에서 `gen0082.py`로 재생성. 0082 패치만 바뀌었다, 49+ / 5-).
+- `powerUpSequence()`: SW 리셋 직후, INT 마스크 쓰기 이전. TSB 3개 레지스터 (CNTL 0xF803 = 0, TRUSTED_BASE 0xF800 lo와 +1 hi = 0, TRUSTED_SIZE 0xF802 = 0). ADDR_MODE 12개 (`kAddrMode64` = 1). 모든 오프셋은 이름 있는 enum에 Mesa 라인과 Linux 라인 주석을 달았다.
+- `readFuse`: `fQfpromRegs`를 `volatile uint32_t *`로 바꾸고 `fQfpromRegs[byteOff / 4]`로 읽는다. `static_assert(kSpeedBinOff % 4 == 0)` 추가.
+
+**검증** (이 머신).
+- 체인 84/84 (깨끗한 `xnu-8796.141.3` 워크트리, 스테이지 3개 실행 후). 체크 18/18.
+- 레지스터 검사 (`check_s16.py`): 15개 enum 값이 Mesa `a6xx.xml` 오프셋과 같다. `kAddrMode64` = 1 = `ADDR_64B` (`adreno_common.xml`). 각 쓰기가 정확히 한 번 (TSB 베이스만 lo와 hi, 두 번). 코드에서 `/4`는 `readFuse` 하나뿐이다 (주석 제외).
+- 정렬: `kSpeedBinOff` = `0x41a0` = 16800 = 4 × 4200이므로 4바이트 정렬이다. 창 베이스 `0x780000`은 페이지 정렬이다 (`sweet.dts:17752`), 따라서 접근 주소도 4바이트 정렬이다.
+- 호출 경로: `readFuse`는 `start()`의 `kSpeedBinOff` 호출 한 곳뿐이다. `fQfpromRegs`를 바이트 오프셋으로 쓰는 다른 곳은 없다. 따라서 `uint8_t` 접근은 남지 않았다.
+- 적용된 워크트리의 `SweetGPU.cpp`와 `SweetGPU.h`가 스테이지 소스와 바이트 단위로 같다.
+- 0083, 0084: 변경 없음.
+- personality 0, ADT GPU 0. `phone-dump/firmware/sqe_gmu/`는 git이 무시한다 (`.gitignore:13`).
+
+**실행 동작.** 새 쓰기는 현재 빌드에서 실행되지 않는다 (게이트 닫힘, personality 없음, ADT GPU 노드 없음). 정렬 정리는 동작을 바꾸지 않는다 (warning-only). 다음 CI 로그에서 `SweetGPU.cpp` 경고가 0이어야 한다.
+
+**다음 (사용자).** (1) 폰을 USB로 연결하고 adb를 승인한 뒤 승인 1을 다시 요청한다. (2) 이 커밋을 포함해 push하고 CI를 재실행한다. 명령은 `CI-PRECHECK.md` 세션 16 절에 있다.
+
+**NO_UPDATE (보류, 변화 없음).** 세션 14 결정 문서 그대로다. 펌웨어 조사 결과가 나오면 판정한다.
 
 ### 세션 15 (2026-10-20): CI PASS 확정 (run 39350775805), 승인 대기 (코드 변경 없음)
 

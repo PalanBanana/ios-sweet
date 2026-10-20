@@ -213,3 +213,26 @@ gh run view <RUN_ID> -R PalanBanana/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID
 - 이 머신 확인 (세션 15): personality 0 (`xnu/` 전체, `.plist` 포함), ADT GPU 0, 체인 84/84, 체크 18/18.
 - 다음 코드 변경을 올릴 때는 위 세션 14 절의 명령을 쓴다. push 대상은 새 커밋을 포함한 `HEAD`다.
 - `sweetgpu=1` 하드웨어 테스트는 금지 유지다. 컴파일 PASS는 실행 안전성을 뜻하지 않는다 (세션 13 체크리스트 그대로).
+
+## 세션 16: 승인 2+3과 readFuse 정리 (커밋 580e857)
+
+- 승인 1 (펌웨어 조사): 미실행. 폰이 USB에 없다 (`adb devices`에 기기 없음, `lsusb`에 Xiaomi·Qualcomm 장치 없음). 연결과 adb 승인 후 다시 요청한다. 기기 시리얼은 문서에 적지 않는다.
+- 코드: `580e857`. TSB 3개 레지스터 (베이스는 lo와 hi), ADDR_MODE 12개 (값 1), `readFuse` 정렬 정리 (warning-only).
+- 검증 (이 머신): 체인 84/84, 체크 18/18, 레지스터 검사 (`check_s16.py`) PASS, personality 0, ADT GPU 0, `phone-dump/firmware/sqe_gmu/`는 git이 무시한다 (`.gitignore:13`).
+- 푸시 범위: `ad20b73..HEAD` = `3b07636`, `580e857`, 이번 docs 커밋 (3개).
+
+```sh
+cd ~/projects/ios-sweet
+git ls-remote fork refs/heads/ci-validate/v1          # ad20b73이어야 한다 (아니면 멈추고 확인)
+git push fork HEAD:ci-validate/v1                      # fast-forward, 3커밋
+gh workflow run xnu.yml -R PalanBanana/ios-sweet --ref ci-validate/v1 \
+  -f macos_version=13.5 -f kernel_config=DEVELOPMENT -f machine_config=SWEET -f keep_going=true
+gh run list -R PalanBanana/ios-sweet --workflow xnu.yml --limit 3    # RUN_ID 확인
+gh run view <RUN_ID> -R PalanBanana/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID>.txt
+./tools/post-ci-analyze.sh ~/ios-sweet-ci/run-<RUN_ID>.txt
+grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
+```
+
+- 기대: `POST_CI_VERDICT: PASS (exit 0)`. `SweetGPU.cpp` 경고 0 (세션 15의 `-Wcast-align`이 사라져야 한다).
+- 이 push에는 코드 커밋이 들어 있으므로, CI가 TSB/ADDR_MODE 쓰기 코드를 처음으로 컴파일한다.
+- 승인 1 재요청 전: 폰을 USB로 연결하고 adb 승인을 받는다. `adb devices`에 `device` 상태로 보여야 한다.
