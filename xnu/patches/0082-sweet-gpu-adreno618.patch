@@ -41,7 +41,7 @@
 +	IOMemoryMap                 *fCxMisc;       /* reg window 2: cx_misc */
 +	IOMemoryMap                 *fQfprom;       /* reg window 3: qfprom (fuses) */
 +	volatile uint32_t           *fRegs;         /* GPU block, dword indices */
-+	volatile uint8_t            *fQfpromRegs;   /* qfprom, byte offsets */
++	volatile uint32_t           *fQfpromRegs;   /* qfprom, dword indices (readFuse passes byteOff / 4) */
 +	IOBufferMemoryDescriptor    *fRingBuf;      /* 32 KiB ring, physically contiguous */
 +	const SweetGpuPwrBin        *fPwrBin;       /* table selected by speed bin */
 +	uint32_t                    fSpeedBin;
@@ -83,7 +83,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,463 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -140,6 +140,9 @@
 +static const uint32_t kSpeedBinMask = 0x1fe00000;
 +static const uint32_t kSpeedBinShift = 21;
 +
++/* readFuse indexes qfprom by dword (byteOff / 4), so the offset must be 4-byte aligned: 0x41a0 = 16800 = 4 * 4200. */
++static_assert(kSpeedBinOff % 4 == 0, "qfprom speed-bin offset must be 4-byte aligned");
++
 +/* MSM_GPU_RINGBUFFER_SZ = SZ_32K (msm_gpu.h:306). The control value below encodes that size. */
 +static const uint32_t kRingBytes = 32 * 1024;
 +static const uint32_t kRbCntlDefault = 0x20C;   /* MSM_GPU_RB_CNTL_DEFAULT, msm_gpu.h:309-311 */
@@ -181,6 +184,22 @@
 +	kRbbmInt0Mask        = 0x0038,  /* a6xx.xml:801 RBBM_INT_0_MASK */
 +	kRbbmInt0Status      = 0x0201,  /* a6xx.xml:552 RBBM_INT_0_STATUS */
 +	kRbbmSecvidTrustCntl = 0xF400,  /* a6xx.xml:775 RBBM_SECVID_TRUST_CNTL */
++	/* TSB and ADDR_MODE (Linux a6xx_gpu.c:1210-1236). Mesa offsets are dword indices. */
++	kRbbmSecvidTsbCntl          = 0xF803,  /* a6xx.xml:778 RBBM_SECVID_TSB_CNTL, Linux 1210 */
++	kRbbmSecvidTsbTrustedBase   = 0xF800,  /* a6xx.xml:776 RBBM_SECVID_TSB_TRUSTED_BASE (reg64, hi at +1), Linux 1220 */
++	kRbbmSecvidTsbTrustedSize   = 0xF802,  /* a6xx.xml:777 RBBM_SECVID_TSB_TRUSTED_SIZE, Linux 1221 */
++	kCpAddrModeCntl             = 0x0842,  /* a6xx.xml:270 CP_ADDR_MODE_CNTL, Linux 1225 */
++	kVscAddrModeCntl            = 0x0C01,  /* a6xx.xml:550 VSC_ADDR_MODE_CNTL, Linux 1226 */
++	kGrasAddrModeCntl           = 0x8601,  /* a6xx.xml:2219 GRAS_ADDR_MODE_CNTL, Linux 1227 */
++	kRbAddrModeCntl             = 0x8E05,  /* a6xx.xml:2840 RB_ADDR_MODE_CNTL, Linux 1228 */
++	kPcAddrModeCntl             = 0x9E01,  /* a6xx.xml:3464 PC_ADDR_MODE_CNTL, Linux 1229 */
++	kHlsqAddrModeCntl           = 0xBE05,  /* a6xx.xml:5009 HLSQ_ADDR_MODE_CNTL, Linux 1230 */
++	kVfdAddrModeCntl            = 0xA601,  /* a6xx.xml:3613 VFD_ADDR_MODE_CNTL, Linux 1231 */
++	kVpcAddrModeCntl            = 0x9601,  /* a6xx.xml:3257 VPC_ADDR_MODE_CNTL, Linux 1232 */
++	kUcheAddrModeCntl           = 0x0E00,  /* a6xx.xml:1202 UCHE_ADDR_MODE_CNTL, Linux 1233 */
++	kSpAddrModeCntl             = 0xAE01,  /* a6xx.xml:4364 SP_ADDR_MODE_CNTL, Linux 1234 */
++	kTpl1AddrModeCntl           = 0xB601,  /* a6xx.xml:4587 TPL1_ADDR_MODE_CNTL, Linux 1235 */
++	kRbbmSecvidTsbAddrModeCntl  = 0xF810,  /* a6xx.xml:779 RBBM_SECVID_TSB_ADDR_MODE_CNTL, Linux 1236 */
 +	kGbifScache0         = 0x3c01,  /* a6xx.xml:1273 GBIF_SCACHE_CNTL0 (rmw in kernel, value unconfirmed) */
 +	kGbifScache1         = 0x3c02,  /* a6xx.xml:1274 GBIF_SCACHE_CNTL1 (rmw in kernel, value unconfirmed) */
 +	kCpRbBase            = 0x0800,  /* a6xx.xml:147 CP_RB_BASE (64) */
@@ -195,6 +214,9 @@
 +
 +/* a6xx.xml:554 RBBM_STATUS bit 0 = CP_AHB_BUSY_CX_MASTER (ignored for idle) */
 +static const uint32_t kRbbmStatusCxAhbBusy = 1u << 0;
++
++/* a5xx_address_mode ADDR_64B (adreno_common.xml:390): value for the TSB and ADDR_MODE writes. */
++static const uint32_t kAddrMode64 = 1;
 +
 +static const SweetGpuPwrBin *
 +selectPwrBin(uint32_t speedBin)
@@ -219,8 +241,8 @@
 +
 +uint32_t MsmGpuAdreno618::readFuse(uint32_t byteOff)
 +{
-+	/* Byte offset, as in sweet.dts. Dword indices are for the GPU block only. */
-+	return *(volatile uint32_t *)(fQfpromRegs + byteOff);
++	/* byteOff is the sweet.dts byte offset. It is 4-byte aligned (static_assert above), so byteOff / 4 is exact. */
++	return fQfpromRegs[byteOff / 4];
 +}
 +
 +bool MsmGpuAdreno618::mapWindow(IOService *provider, uint32_t index, uint64_t minBytes,
@@ -300,7 +322,7 @@
 +		teardown();
 +		return false;
 +	}
-+	fQfpromRegs = (volatile uint8_t *)fQfprom->getVirtualAddress();
++	fQfpromRegs = (volatile uint32_t *)fQfprom->getVirtualAddress();
 +
 +	/* Speed bin: a read of qfprom fuses, not of the GPU block. */
 +	fSpeedBin = (readFuse(kSpeedBinOff) & kSpeedBinMask) >> kSpeedBinShift;
@@ -411,6 +433,28 @@
 +	writeReg(kRbbmSwResetCmd, 0);
 +	(void)readReg(kRbbmSwResetCmd);
 +	IODelay(1);
++
++	/*
++	 * TSB (trusted range off) and ADDR_MODE (64-bit addressing), in the order of
++	 * a6xx hw_init (a6xx_gpu.c:1210-1236). The ADDR_MODE writes sit under
++	 * !adreno_is_a7xx (a6xx_gpu.c:1223), which a618 satisfies.
++	 */
++	writeReg(kRbbmSecvidTsbCntl, 0);
++	writeReg(kRbbmSecvidTsbTrustedBase, 0);        /* reg64 lo */
++	writeReg(kRbbmSecvidTsbTrustedBase + 1, 0);    /* reg64 hi */
++	writeReg(kRbbmSecvidTsbTrustedSize, 0);
++	writeReg(kCpAddrModeCntl, kAddrMode64);
++	writeReg(kVscAddrModeCntl, kAddrMode64);
++	writeReg(kGrasAddrModeCntl, kAddrMode64);
++	writeReg(kRbAddrModeCntl, kAddrMode64);
++	writeReg(kPcAddrModeCntl, kAddrMode64);
++	writeReg(kHlsqAddrModeCntl, kAddrMode64);
++	writeReg(kVfdAddrModeCntl, kAddrMode64);
++	writeReg(kVpcAddrModeCntl, kAddrMode64);
++	writeReg(kUcheAddrModeCntl, kAddrMode64);
++	writeReg(kSpAddrModeCntl, kAddrMode64);
++	writeReg(kTpl1AddrModeCntl, kAddrMode64);
++	writeReg(kRbbmSecvidTsbAddrModeCntl, kAddrMode64);
 +
 +	/*
 +	 * 0 masks every RBBM_INT_0 source (a6xx_gpu.c:1849, the hang path). Linux
