@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 23 (2026-10-20): ARC 보고 출력 경로 수정. 화면 출력은 kprintf (fbcon). EARLY 콘솔은 stage 20 뒤에 꺼진다 (`serial_exists`). 조회는 `SweetBattery::start()`에서 읽기 전용으로 실행하도록 옮겼다. DT에 ARC 주소가 없어서 주소 하드코딩은 하지 않았다. 상세: '세션 23' 절.**
 - **세션 22 (2026-10-20): SQE 형식 결정 (`has_whereami = true`, 업스트림 규칙과 `adreno_fw_create_bo` 오프셋 확인). 정정: 세션 19–20의 "dw0 = 0 구버전" 판정은 오프셋 오류였다. 기기 ARC 진단 (Task A)은 차단 (CI 빌드 없음, adb 셸 권한 거부). RPMh 투표, SMMU 페이지 테이블, 0082 통합은 구현 완료 (게이트 뒤, 기본 꺼짐, 실기 미검증). 상세: '세션 22' 절.**
 - **세션 21 (2026-10-20): RPMh ARC 조회 `6a5a199` (`sweetrpmhq=1`, 읽기 전용), GMU 창 매핑 `c656f77` (읽기·쓰기 없음), gpu_region 위험 철회, `a618_gmu.bin` 로더 설계 (코드 없음). 체인 84/84, 로컬 검사 PASS. 기기 쓰기·부팅 없음. 다음 결정: 로더 운반 경로 (R1 RAM 페이로드 또는 R2 no-map 영역)와 XNU 예약 경로 확인. 승인 요청 (세션 22): ARC 부팅 진단 (권장 승인), SQE 조사용 인터넷 (승인 필요), 부팅 DT 진단 (권장 보류). 상세: '세션 21' 절.**
 - **세션 20 (2026-10-20): CI `39397002375` PASS 확인 (빌드 `ebf816e`). GMU 5단계 설계와 블로커 순서, RPMh ARC 확장 설계 (`gfx.lvl`·`cx.lvl`·`mx.lvl`). CX ON은 `cx.lvl` 투표가 먼저 필요하다. SQE 형식 미확정 (CP 기동 전 해결). 기기 gpu_region은 0x97f15000 (라이브 DT). 코드 변경 없음. 세션 21 승인 요청 3건. 상세: '세션 20' 절.**
@@ -33,6 +34,47 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 23 (2026-10-20): ARC 보고 출력 경로 수정 (화면 kprintf), 읽기 전용 보고를 SweetBattery 시작으로 이동
+
+**요청 대비 결과.** Task 1 (화면 출력) 구현. Task 2 (DT에서 cmd-db 주소를 추정해 하드코딩)는 하지 않았다. 근거는 아래다. Task 3 (패치, 체인, 커밋)은 완료.
+
+**왜 EARLY 대신 kprintf인가 (확인됨).**
+- `arm_init.c` (0012): stage 20 "kprintf startup complete" 뒤에 `if (serial_exists) sweet_early_disable();`가 있다. 그래서 EARLY 화면 콘솔은 꺼진다. 화면의 마지막 줄 "SWEET EARLY 20"은 멈춘 것이 아니라 kprintf가 넘겨받은 지점이다.
+- `serial_init()` (`pexpert/arm/pe_serial.c`): `fbcon_probe()`가 ADT 노드 `sweet-fbcon`을 읽고 `sweet_fbcon_serial_functions`를 등록하면 `gPESF`가 NULL이 아니게 되어 `serial_init()`이 1을 돌려준다. 그 값이 `serial_exists`다. `tools/mkadt.py:182`가 이 노드를 만든다. 0003 패치: kprintf 출력은 `sweet-fbcon` 프레임버퍼에 그려진다.
+- 주의: fbcon은 화면 끝에서 위로 감싸고 스크롤하지 않는다 (0003 주석). 리포트 뒤의 부팅 출력이 많으면 리포트가 덮인다. 사진은 부팅 직후 빨리 찍어야 한다.
+
+**왜 기존 쿼리가 안 보였나 (추정, 기기 로그로는 확인하지 못함).**
+- 기존 쿼리는 `sweet_rpmh_vreg_enable()` 끝에서만 실행됐다. 이 함수는 `sweet_touch`의 전원 시퀀스에서만 불리고, 그 전에 `touch_clocks()`와 `touch_se_init()`이 성공해야 한다 (0062 `sweet_touch.c`).
+- `sweet_touch_init()`은 `sweet_ufs.c` 초기화가 `return 0`에 닿기 직전에 불린다 (0060, 0072). 즉 UFS 초기화가 끝까지 성공해야 한다.
+- 이 셋 중 하나라도 실패하면 쿼리는 실행되지 않는다. 화면에도 디스크에도 흔적이 없는 것과 맞는다.
+
+**디스크 로그 (확인됨).** 사용자가 덤프한 `ios-arc-raw.bin` (userdata 끝 4 MiB)은 전부 0바이트다. `SWEETLOG` 헤더가 없어서 `tools/sweet-log.py`가 "log never flushed, or wrong area"로 거부한다. 이 부팅에서 디스크 로그는 한 번도 flush되지 않았다. 그래서 디스크 경로는 증거가 되지 못한다. 0047 패치의 flush 조건은 아직 확인하지 않았다. 덤프 파일 `dmesg.txt`, `ios-arc-*`, `shim/payload.bin`은 저장소에 추적되지 않은 채 남아 있다 (커밋하지 않았다).
+
+**변경.**
+- `sweet_rpmh_arc_report()` (새 공개 함수, `bsd/dev/sweet_rpmh.c`): `sweetrpmhq=1` (정확히 값 1)일 때만 동작한다. RPMh 락을 잡고, 아직 매핑되지 않았으면 `rh_map()`으로 매핑한다 (읽기만). 그다음 `gfx.lvl`, `cx.lvl`, `mx.lvl`을 조회한다. 아무것도 쓰지 않는다.
+- 호출 위치: `SweetBattery::start()` (0062 `SweetBattery.cpp`), `IOPMPowerSource::start()` 성공 뒤. 이 서비스는 `IOResources` 공급자에 매칭되므로 ADT 노드 없이 부팅마다 시작하고, UFS나 터치 하드웨어에 의존하지 않는다.
+- 기존 호출 (`sweet_rpmh_vreg_enable` 끝)은 제거했다. 리포트가 두 번 찍히지 않도록 하기 위해서다.
+- 출력: `SWEET ARC: gfx.lvl addr=... slave=3 aux-len=N prio=...`, 다음 줄에 aux 값을 16진수로 16개씩 줄바꿈해서 찍는다. 조회가 빗나가면 한 번만 `SWEET ARC: slave 3 name "..." addr=...` 목록을 찍는다 (최대 24개, 읽기만). 시작 줄 `SWEET ARC: report start (sweetrpmhq=1)`는 리포트가 실행됐는지 보는 표지다.
+- 가정: aux 값의 원소 폭은 16비트다. 기존 코드를 그대로 따른 가정이며 기기에서 검증되지 않았다. 프롬프트 예시의 `level=%u`는 쓰지 않았다. cmd-db에는 리소스별 현재 레벨이 없고 aux 표만 있다.
+
+**Task 2를 하지 않은 이유 (확인됨).**
+- `sweet.dts`의 `rpmh-regulator-gfxlvl` (12954행 근처)은 `qcom,resource-name = "gfx.lvl"`만 가진다. `pm6150_s2_level` (12956행 근처)에도 `reg`가 없다. ARC 리소스 주소는 DT에 없고, cmd-db (locator `0x0c3f000c`) 안의 런타임 데이터다.
+- 추정한 주소를 하드코딩하면 TCS에 잘못된 주소가 들어가 다른 RPMh 리소스에 투표할 수 있다. 그래서 하지 않았다. 대신 실행 시 조회한 실제 주소를 찍는다.
+
+**검사.**
+- 체인 84/84. 0062의 `sweet_rpmh.c`와 `SweetBattery.cpp` 두 섹션을 재생성했다 (`regen0062b.py`, 대상 경로 지정). 적용된 두 파일은 작업 사본과 같다.
+- 호스트 테스트 (세션 스크래치패드 `t22/t22-report-main.c`, 가짜 cmd-db): `gfx.lvl`과 `cx.lvl`이 찍히고, 20개 aux 값이 16개씩 줄바꿈되며, `mx.lvl` 미스가 보고되고 이름 목록이 나온다. 종료 시 락이 풀린다.
+- 스텁 구문 검사: `sweet_rpmh.c` 원본과 새 버전 모두 경고 0, 오류 0. `SweetBattery.cpp`는 IOKit 스텁이 없어서 선언과 호출만 마이크로 검사했다.
+- 기기 실행은 없다. 이 세션의 기기 셸 접근은 분류기에 거부되었다.
+
+**기기 확인 순서 (`sweetrpmhq=1` 부팅, 사용자).**
+1. `SWEET ARC: report start (sweetrpmhq=1)`가 화면에 있으면 트리거가 실행된 것이다. 없으면 `SweetBattery::start()`가 불리지 않은 것이다. 그때는 IOResources 매칭을 확인해야 한다.
+2. `SWEET RPMH: rsc=... cmd-db version=...` 줄로 RSC와 cmd-db가 매핑됐는지 본다.
+3. `SWEET ARC: gfx.lvl addr=...`와 aux 줄을 적는다. `lookup matches=0`이면 바로 아래 이름 목록에서 실제 이름을 찾는다.
+4. 사진은 부팅 직후 빨리 찍는다 (fbcon은 덮어쓴다).
+
+**커밋.** `0062-ext: print ARC query results to framebuffer for hardware validation` (0062 패치와 이 절). push는 하지 않았다.
 
 ### 세션 22 (2026-10-20): SQE 형식 결정 (Task B), 기기 ARC 진단 차단 (Task A), RPMh·SMMU 구현 (진행 중)
 
