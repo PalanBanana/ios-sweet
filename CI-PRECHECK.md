@@ -284,3 +284,11 @@ grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
 ```
 
 - 이 push에서 CI가 GDSC 점검, CP_PROTECT 33, NO_UPDATE를 처음으로 컴파일한다. 컴파일 PASS는 실행 안전성을 뜻하지 않는다. `sweetgpu=1` 하드웨어 테스트는 금지 유지다.
+
+## 세션 20: CI 확인 (run 39397002375 PASS, 빌드 커밋 ebf816e)
+
+- 로그: `~/ios-sweet-ci/run-39397002375.txt`. `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`.
+- 빌드 커밋: `ebf816e6450e30cceb31b6b59734abe2ad6eb925` (checkout 로그 줄). `SweetGPU.cpp` 컴파일 줄 있음 (clang++ `-std=gnu++1z`, Xcode 15.0.1). `SweetGPU.cpp` 경고 0. 포함된 XNU 헤더의 공통 경고만 있다.
+- 판정: `POST_CI_VERDICT: PASS (exit 0)`.
+- 주의: `ls -t ~/ios-sweet-ci/run-*.txt | head -1`은 `.build-tail.txt`를 고른다. 분석은 `run-<RUN_ID>.txt`를 직접 지정한다 (잘못 고르면 "verify step did not run"이 나온다).
+- 다음 push 범위: `ebf816e..HEAD` (세션 20 문서 커밋 1개). 먼저 `git ls-remote fork refs/heads/ci-validate/v1`이 `ebf816e`인지 확인한다. 문서만 push하면 CI 재실행은 필요 없다.

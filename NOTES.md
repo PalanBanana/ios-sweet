@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 20 (2026-10-20): CI `39397002375` PASS 확인 (빌드 `ebf816e`). GMU 5단계 설계와 블로커 순서, RPMh ARC 확장 설계 (`gfx.lvl`·`cx.lvl`·`mx.lvl`). CX ON은 `cx.lvl` 투표가 먼저 필요하다. SQE 형식 미확정 (CP 기동 전 해결). 기기 gpu_region은 0x97f15000 (라이브 DT). 코드 변경 없음. 세션 21 승인 요청 3건. 상세: '세션 20' 절.**
 - **세션 19 (2026-10-20): NO_UPDATE 구현 (커밋 `a4b0469`, 승인 2).** `CP_RB_CNTL = 0x0800020C`. RPTR 섀도는 설정하지 않는다 (shadow 없음). A618 GMU는 `a618_gmu.bin`일 가능성이 높다 (추정). GX 켜기 설계는 Linux 기준 GMU 경로 (호스트 직접 GDSCR 해제는 Linux 선례 없음). XNU에는 RPMh 클라이언트가 있으나 `gfx.lvl` ARC 투표가 없다. SQE 형식과 gpu_region 불일치 (dtbo 오버레이) 조사. 상세: '세션 19' 절.
 - **세션 18 (2026-10-20): 폰 read-only 조사, zap 재분석, 승인 요청 3건 (코드·커밋 변경 없음, 문서 미커밋).** SQE·GMU·zap 실물 확인 (`/vendor/firmware`). Android idle에서 GX·CX·VDD_GFX 모두 off. zap은 Android 커널 PIL(`a615_zap` ONLINE)이 올리고, XNU에는 SCM 경로가 없어 no-zap이 Linux 동등이다. 정정: NO_UPDATE는 SQE와 무관하게 필요하다 (CP 기동 전). 상세: '세션 18' 절.
 - **세션 17 (2026-10-20): GX GDSC 점검과 CP_PROTECT 33 구현 (커밋 `e6bb304`).** 승인 1·3 구현, 승인 2 (HWCG) 철회. 체인 84/84, `check_s17.py` PASS. 구현 전 QEMU 기준선 부팅 정상 (패닉 없음, 옛 커널과 같은 데이터 어보트 1회). 컴파일과 기기 판독은 미확인. 상세: '세션 17' 절.
@@ -30,6 +31,110 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 20 (2026-10-20): CI 확인, GMU 5단계 설계, RPMh ARC 확장 설계, SQE·DT 판정 (코드 변경 없음)
+
+**전제.** HEAD `ebf816e` (작업 트리 clean). 참조: `~/refs/linux` `c03c1a1` (얕은 클론, 이력 1개), `~/refs/mesa` `f28352d`. 폰은 이번 세션에 접근하지 않았다.
+
+**Task A (CI 확인).** `~/ios-sweet-ci/run-39397002375.txt`: `SWEET_PATCH_SUMMARY: result=PASS applied=88 skipped=4 baseline_skipped=4 failed=0 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`. 빌드 커밋 `ebf816e6450e30cceb31b6b59734abe2ad6eb925` (checkout 로그). `SweetGPU.cpp` 컴파일 줄 확인 (clang++, Xcode 15.0.1, `-std=gnu++1z`). `SweetGPU.cpp` 경고 0 (포함된 XNU 헤더의 공통 경고만 있음). `POST_CI_VERDICT: PASS (exit 0)`.
+- 주의: `ls -t run-*.txt | head -1`은 `.build-tail.txt`를 고른다. 분석에는 `run-<RUN_ID>.txt`를 직접 지정한다.
+
+**Task B (GMU 5단계 설계, 문서만).**
+
+Linux 시퀀스 (A618, legacy GMU, `a6xx_gmu_resume` 1309–1396):
+1. `pm_runtime_get_sync` → `a6xx_gmu_gxpd_get` (1324): GX genpd → `gdsc_gx_do_nothing_enable` → 부모 `regulator_enable(gfx.lvl)`.
+2. GMU 클록: core 200 MHz, hub 150 MHz (1327–1329), `clk_bulk_prepare_enable`.
+3. `a6xx_gmu_secure_init` (1200): A618은 SCM 호출 없음 (a750·a8xx만). SCM은 블로커가 아니다.
+4. `a6xx_gmu_fw_start` (929): legacy면 `GMU_GENERAL_7 = 1` → `a6xx_rpmh_start` (607–636) → cold boot이면 `a6xx_gmu_fw_load` (864): legacy는 이미지 전체를 `GMU_CM3_ITCM_START`에 쓴다 (889–890, 크기 ≤ 0x8000). `FW_INIT_RESULT = 0`, `CM3_BOOT_CONFIG = 0x02`, `HFI_QTBL_ADDR = gmu->hfi.iova` (**IOVA**).
+5. `a6xx_gmu_start` (291–331): `CM3_SYSRESET = 1 → 0`, `FW_INIT_RESULT` 폴링.
+6. `a6xx_hfi_start` (333–346): `HFI_CTRL_INIT = 1`, `HFI_CTRL_STATUS` bit 0 폴링.
+7. legacy rail (`a6xx_gmu_gfx_rail_on` 529–543, 호출 1050): `BOOT_SLUMBER_OPTION = 0`, `GX_VOTE_IDX`/`MX_VOTE_IDX` = `gx_arc_votes[nr_gpu_freqs−1]`, OOB BOOT_SLUMBER (set bit 22, ack bit 30; `a6xx_gmu_set_oob` 393–455).
+8. `a6xx_sptprac_enable` (482–506, 호출 1054): `GX_SPTPRAC_POWER_CONTROL = 0x778000`, `SPTPRAC_PWR_CLK_STATUS & 0x38 == 0x28` 폴링.
+
+호스트 GDSC 순서 (`gdsc_toggle_logic(ON)`, `gdsc.c` 147–): **부모 공급을 먼저 켠다 (`sc->rsupply`)** → SW_COLLAPSE 해제 → 상태 폴링.
+- CX: 부모 = `pm6150l_s2_level` (phandle 0x1d) = RPMh 자원 **`cx.lvl`** (DT 13018). CX ON에는 `cx.lvl` 투표가 먼저 필요하다.
+- GX: `gdsc_gx_do_nothing_enable` (`gdsc.c` 714–727). 부모 = `pm6150_s2_level` = `gfx.lvl` (DT 12956). GX의 GDSCR은 GMU가 쓴다.
+- `gpu_cx_gdsc`: `power_on` 재정의 없음 (호스트가 켠다). `flags = VOTABLE`은 끄기 쪽에만 영향 (`gdsc.c` 167). `gds_hw_ctrl = 0x1540` (`gpucc-sm8150.c`).
+
+5단계 설계 (XNU 이식):
+
+| 단계 | 내용 | 블로커 | 쓰기 |
+|---|---|---|---|
+| 0 | 물리 매핑: GMU 창 `0x506a000`/`0x31000`, PDC cfg `0xb290000`/`0x10000`, PDC seq `0xb490000`/`0x10000`. GMU 레지스터 절대 주소 = `0x5000000 + dword×4` (Mesa 오프셋은 GPU 기준 dword; `GMU_BYTE_OFFSET` = `(off<<2) − mmio_offset`, `mmio_offset = 0x6a000`). RSCC = GMU 창 + `0x23000` (A618 분기, `a6xx_gmu.c` 2404–2418; `GPU+0x50000`은 A8xx) | ADT가 아니라 물리 매핑 (gpucc 방식) | 읽기 |
+| 1 | CX ON: `cx.lvl` ARC 투표 → `gpu_cx_gdsc` SW_COLLAPSE 해제 → 상태 폴링 | B1 (ARC), CX 상태 주소 (드라이버 `gds_hw_ctrl 0x1540` vs DT `hw-ctrl-addr 0xcc`, 불일치) | 쓰기 |
+| 2 | GX rail: `gfx.lvl` ARC 투표 (genpd gx → 부모 공급) | B1, 레벨 값 (`init-voltage-level 0x11`의 의미 미확정) | 쓰기 |
+| 3 | GMU 준비: `a6xx_rpmh_start` (RSCC 시퀀스), `GENERAL_7 = 1` | RSCC 시퀀스 분석. PDC 초기화 필요 여부 (`a6xx_gmu_rpmh_init` 668–801은 `a6xx_gmu_init` 2469에서 무조건 호출, A618 `pdc_address_offset = 0x30090`) | 쓰기 |
+| 3a | `a618_gmu.bin` 적재: legacy는 이미지 전체를 `GMU_CM3_ITCM_START` (dword 0x1b400 = 절대 0x506d000)에 쓴다. 크기 ≤ 0x8000 | 로더는 단순 (블록 파서 불필요). 기기 파일은 정확히 0x8000 B | 쓰기 |
+| 3b | `HFI_QTBL_ADDR = gmu->hfi.iova` | **B0: GMU용 SMMU 컨텍스트와 DMA 버퍼 (IOVA)**. XNU에는 SMMU가 없다 | — |
+| 4 | `CM3_SYSRESET` 토글 → `FW_INIT_RESULT` 폴링 → `HFI_CTRL_INIT` → 상태 폴링 | B3 (HFI v1), B0 | 쓰기 |
+| 4b | OOB BOOT_SLUMBER (set bit 22 → ack bit 30) | B3 | 쓰기 |
+| 5 | `GX_VOTE_IDX` = `gx_arc_votes[top]`, `SPTPRAC` (0x778000) | B2: GX/MX 레벨 표 (cmd-db aux `gfx.lvl`, `mx.lvl` 또는 `gmxc.lvl` + OPP 레벨). 기기 DT의 GPU 전력 레벨에는 레벨 속성이 없다 | 쓰기 |
+| 공통 | GMU 클록 (core 200 MHz, hub 150 MHz, DT `clocks` 4개) | B-CLK: XNU에는 클록 제어가 없다 | 쓰기 |
+
+블로커 순서 (해결 순서 기준):
+- **B0 SMMU (GMU IOVA)** — 3b, 4, 4b의 전제. 이것 없이는 cold boot이 불가하다.
+- **B-CLK 클록** — 0 다음부터 전부 필요.
+- **B1 ARC 투표 (`cx.lvl`, `gfx.lvl`, `mx.lvl`)** — 1, 2, 5.
+- **B2 레벨 표** — 5.
+- **B-PDC PDC/RSCC 시퀀스 필요 여부** — 3 (미확정).
+- **B3 HFI v1과 OOB** — 4.
+- 3a 로더는 가장 단순하지만 B0 이전에는 쓰지 않는다.
+
+**권장: GMU 경로.** 호스트가 GDSCR을 직접 해제해 GX를 켜는 방식은 Linux에서 GX에 쓰이지 않는다. CX는 호스트가 켜는 것이 Linux 선례이며, `cx.lvl` 투표가 선행돼야 한다.
+
+**Task C (RPMh ARC 확장 설계, 문서만).**
+- 현재 `sweet_rpmh.c` (0062): TCS MMIO 직접 쓰기 (RSC `0x18220000`, TCS `0x18220d00`, 활성 TCS `RH_ACTIVE_N = 2`). cmd-db 사전 `0x0c3f000c` (magic `0x0c0330db`). 조회 `rh_lookup`은 슬레이브 3..5를 훑지만 **VRM (4)만 통과**시킨다 (`addr >> 16 == 4`). 전송 `rh_send`는 명령 3개 (전압 +0, 모드 +8 = 7, 활성화 +4 = 1). 공개 API는 `sweet_rpmh_vreg_enable("ldoc11", 2950–3400 mV)` 하나.
+- RPC 경로는 **MMIO TCS 직접 쓰기**다 (SMC 아님, mailbox 아님). DT의 `mboxes = <0x1b 0x00>`는 Linux 경로이고, XNU는 쓰지 않는다.
+- ARC와 VRM 차이 (`rpmhpd.c` 915–936: `tcs_cmd {addr = cmd-db 주소, data = corner}`, `rpmh_write(dev, state, &cmd, 1)`):
+  - 슬레이브 ID: ARC = 3 (`CMD_DB_HW_ARC`), VRM = 4 (`cmd-db.h`). 현재 `rh_lookup`은 ARC 항목을 `invalid VRM entry`로 거부한다.
+  - 명령 수: ARC 1개 (레벨 인덱스 `data`), VRM 3개 (mV, 모드, 활성화).
+  - 주소 검사: VRM은 `addr >> 16 == 4`, ARC는 `== 3` (VERIFY: 기기 cmd-db 실물에서 확인).
+  - 자원: `gfx.lvl` (DT 12956), `mx.lvl` (12971), `cx.lvl` (13018).
+- 설계:
+  1. `rh_lookup`에 ARC 분기를 추가한다 (슬레이브 3, 주소 형식 검사 분기). 자원 허용 목록은 `{gfx.lvl, cx.lvl, mx.lvl}`.
+  2. `rh_send`를 명령 목록 방식으로 일반화한다 (VRM 3개, ARC 1개). TCS 선택, IRQ 마스크, 완료 확인, quarantine 로직은 그대로 둔다.
+  3. 공개 API `sweet_rpmh_arc_vote(res, level)`: 허용 레벨은 cmd-db aux 표에서 확인된 값만.
+  4. **1단계는 조회 전용**: `rh_lookup`의 결과 (주소, 슬레이브, aux)만 로그로 확인하고 투표하지 않는다. 기기 부팅 로그가 필요하므로 승인 대상이다.
+- 위험: 레벨 투표는 PMIC 레일 전압을 바꾼다 (GPU와 CX 레일). 잘못된 레벨은 과전압이나 저전압이 된다. 실투표는 별도 승인.
+- 레벨 의미: `qcom,init-voltage-level = <0x11>` (gfx와 cx 공통). refs에는 RPMh 레벨 상수 헤더가 없다 (`qcom,rpmh-regulator.h`는 모드 상수만). 0x11의 의미는 cmd-db aux 표로 확인해야 한다 (VERIFY).
+
+**Task D (SQE 형식 재확인).**
+- Linux 검사식 (`a6xx_gpu.c` 1011–1027): 패치 표식 `(dw0 & 0xf) == 0xa && (dw2 & 0xf) >= 1`, 버전 `(dw0 & 0xfff) >= 0x190`. 주석은 버전과 패치 레벨을 dw[3]에 둔다고 적지만, 코드는 패치 레벨을 dw[2]에서 읽는다. **주석과 코드가 서로 다르다.**
+- 기기 `a630_sqe.fw`: dw0 = `0x00000000`, dw1 = `0x016ee19a`, dw2 = `0x01001ee1`, dw3 = `0x01190001`.
+  - 주석 해석 (버전 dw3): 패치 표식 (dw0 니블 0xa) 없음 → 패치되지 않은 구버전으로 판정.
+  - 코드 해석 (버전 dw0): 0 → 구버전 → `-EPERM` (`a6xx_gpu.c` 1072–1077).
+  - dw1 가설: 하위 12비트 `0x19a` ≥ `0x190`이므로 통과할 수 있다. 근거가 없어 검증 불가.
+- git 이력은 없다 (`~/refs/linux`는 얕은 클론, 커밋 1개). 규칙의 변경 이력으로 해석을 확인할 수 없다.
+- 판정: **형식 미확정.** dw0 해석과 dw3 해석 모두 구버전으로 나온다. Android KGSL이 같은 파일을 쓰므로, 업스트림 규칙의 형식 가정이 틀렸을 가능성이 높다.
+- **CP 기동 전 해결 필수.** `has_whereami`는 보류한다. NO_UPDATE에는 무관하다 (세션 19).
+- 해결 후보: (a) 파일 자체의 명령 구조와 버전 문자열 분석, (b) 기기 KGSL이 SQE 버전을 노출하는 노드가 있다면 읽기 (폰 접근 필요, 다음 세션), (c) 다른 펌웨어 패키지와 비교 (범위 밖).
+
+**Task E (부팅 DT 선택과 gpu_region).**
+- `mkadt.py`는 DT 파일을 읽지 않는다. 주소는 코드 상수다 (주석의 "sweet live FDT"에서 옮김). reserved-memory는 placeholder다 (`mkadt.py` 114행). dtbo 처리는 없다.
+- shim: `shim/fdt.c`는 DTB에서 `/chosen`의 `linux,initrd-start/end`만 읽는다 (`loader.c` 83–84). DTB 포인터는 부트로더가 넘긴다 (`shim.c` 373, `shim_main(dtb)`). 오버레이 적용 코드는 없다.
+- `tools/unpack_bootv2.py`: 부트 이미지 v2의 `dtb` 파트를 꺼낸다 (dtbo 파트는 아니다).
+- 판정:
+  - 덤프 `phone-dump/sweet.dts`의 `gpu_region = 0x97715000`은 부트 이미지 DTB 계열의 값이다 (오버레이 전, 추정).
+  - 라이브 DT (세션 18)의 `gpu_region = 0x97f15000`은 오버레이 적용 결과다 (확인됨).
+  - **기기 실제 예약 주소는 `0x97f15000`이다.** `0x97715000`은 기본 DT 값이므로 쓰지 않는다.
+  - XNU가 받는 DTB에 오버레이가 적용됐는지는 미확정이다 (shim 로그는 DTB 주소와 매직만 찍는다). **VERIFY**: 부팅 진단으로 `pil_gpu_mem`의 reg를 읽는다 (승인 필요).
+- XNU는 지금 gpu_region을 예약하지 않는다 (ADT placeholder). zap 로드도 없다. 현재 동작에는 영향이 없다.
+
+**정정 (세션 19 대비).**
+1. 세션 19의 "shim은 DT를 파싱하지 않는다"는 부정확하다. shim은 DTB의 `/chosen` initrd 값만 읽는다.
+2. A618의 RSCC 기준은 GMU 창 + `0x23000`이다. `GPU + 0x50000`은 A8xx 분기다.
+3. GMU 오프셋 표기: Mesa의 GMU 오프셋은 GPU 기준 dword다 (절대 주소 = `0x5000000 + off×4`). `GMU_BYTE_OFFSET`을 기준으로 쓴다.
+4. CX ON은 GDSCR 쓰기 하나로 끝나지 않는다. `cx.lvl` 투표가 선행되어야 한다 (부모 공급).
+
+**세션 21 승인 요청 (대기).**
+1. **RPMh ARC 확장, 1단계 (조회 전용 코드).** `sweet_rpmh.c`에 ARC 조회 분기를 추가한다 (슬레이브 3, 허용 목록 `gfx.lvl`/`cx.lvl`/`mx.lvl`). 투표는 없다. 기기 부팅 진단이 필요하다. **권장: 승인.**
+2. **GMU 창 물리 매핑 (ADT 추가 없음).** `gpucc` 방식으로 GMU 창과 PDC 두 구역을 게이트 뒤에서 물리 매핑하고, 읽기 전용 레지스터 (`GMU_CM3_SYSRESET`, `HFI_CTRL_STATUS` 등)만 확인한다. **권장: 승인 (읽기만).** 쓰기는 별도 승인이다.
+3. **`a618_gmu.bin` 로더 설계 승인.** legacy 경로: 이미지 전체를 ITCM (`0x1b400` dword)에 쓴다. B0 (SMMU) 해결 전에는 쓰지 않는다 (HFI IOVA 때문에 cold boot이 불가하다). **권장: 설계만 승인, 구현은 B0 이후.**
+- 추가 (세션 22 이후): B0 SMMU 설계, B-CLK 클록 설계, SQE 형식 확정 (CP 기동 전 필수), 부팅 DT 확인 진단.
+
+**커밋.** 이 문서 커밋 (NOTES.md 세션 20, CI-PRECHECK.md 세션 20). 코드 변경 없음.
+
+**sweetgpu=1 금지 유지.** personality와 ADT GPU 노드는 없다. 하드웨어 부팅은 없었다.
 
 ### 세션 19 (2026-10-20): NO_UPDATE 구현 (승인 2), GX 켜기 설계, A618 GMU 판정, SQE·gpu_region 조사
 
