@@ -50,6 +50,14 @@
 - Android KGSL 소스는 읽지 않았다 (검색에서 해당 경로를 찾지 못했다). 같은 파일을 기기의 Android KGSL이 로드하고 GPU가 동작한다 (세션 18 조사). 이것은 관찰에 기반한 추정이다.
 - 결과: SQE 수락은 CP 기동 전 차단 요인에서 제외한다.
 
+**Task C: RPMh ARC 투표 (`sweet_rpmh_arc_vote`, 게이트 `sweetrpmh=1`, 기본 거부).**
+- 공개 함수: `int sweet_rpmh_arc_vote(const char *res, uint32_t level)`. `res`는 `gfx.lvl`, `cx.lvl`, `mx.lvl`만 받는다. 기존 `sweet_rpmh_*` 이름 규칙에 맞춰 요청의 `rpmh_arc_vote`를 이 이름으로 했다.
+- `sweetrpmh=1`이 없으면 cmd-db 조회만 하고 TCS에 아무것도 쓰지 않는다 (`EPERM`).
+- 게이트가 열려 있어도 `rh_arc_level_verified()`가 허용하지 않는 level은 거부한다 (`EPERM`). 이 함수는 지금 항상 거짓을 돌려준다. 검증된 표가 없기 때문이다 (Task A 차단). 항목은 `sweetrpmhq=1` 출력에서만 추가한다.
+- 구조: `rh_send`를 `rh_send_cmds(addr[], data[], n)`로 일반화했다. n = 3이 VRM이다 (전압 +0, 모드 +8, 활성 +4, 마스크 7). n = 1이 ARC다 (주소 = cmd-db 주소, 데이터 = level, 마스크 1). `rh_lookup`은 `rh_lookup_slave(res, slave, ...)`로 일반화했고, VRM은 래퍼로 같은 동작을 한다.
+- 검증 (로컬): (1) 스텁 구문 검사에서 원본과 새 버전 모두 경고 0, 오류 0. (2) 호스트 하네스 (세션 스크래치패드 `t22/`, 테스트 전용 복사본: aarch64 배리어 제거, TCS 완료 시뮬레이션): 원본 VRM과 새 VRM 경로가 같은 입력에서 TCS 메모리를 바이트 단위로 같게 만든다. ARC 슬롯은 `msgid 0x10108`, `addr = 주소`, `data = 0x11`이고 나머지 슬롯과 TCS1은 그대로다. (3) 체인 84/84.
+- 미검증: 기기에서의 cmd-db 조회, ARC 주소 형식 (`addr >> 16 == 3`과 16바이트 정렬은 가정이다), TCS의 ARC 응답, 레일 전압 변화. 기기 실행은 승인이 필요하다.
+
 ### 세션 21 (2026-10-20): ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), gpu_region 위험 철회, a618 로더 설계 (기기 쓰기 없음)
 
 **전제.** 시작 HEAD `44c7503`. 세션 커밋 한도 3개: `6a5a199` (0062-ext), `c656f77` (0082 GMU 매핑), 이 문서 커밋. 폰에 쓰지 않았고 부팅하지 않았다. `sweetgpu=1`, `/dev/mem`, 레지스터 쓰기, push, gh 없음. 패치 체인 워크트리는 `~/refs/xnu-sweet`.
