@@ -304,3 +304,15 @@ grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
 - push (사용자가 수행, 이 세션은 push하지 않음): 먼저 `git ls-remote fork refs/heads/ci-validate/v1`이 `ebf816e`인지 확인한다. 범위는 `ebf816e..HEAD`다 (세션 20 문서 `44c7503`, 세션 21 커밋 3개). 명령은 `git push fork HEAD:ci-validate/v1` (세션 13 정정).
 - 로컬 검사 결과: `check_s17` PASS, `check_s19` PASS, `check_s21_gmu` PASS (스크립트는 세션 스크래치패드, 저장소 밖).
 - 기기 쓰기·부팅: 없음.
+
+## 세션 22: SQE 결정 (`e6d9e33`), RPMh 투표 (`13b275e`), SMMU 페이지 테이블 (`562cf27`), 0082 통합
+
+- 로컬 검사 (CI 대체 아님): 체인 84/84. 호스트 테스트는 세션 스크래치패드 `t22/`: 페이지 테이블 (`t22-pgt-test`, `-Werror`) PASS, RPMh 하네스 (원본과 새 VRM 경로가 TCS 메모리를 바이트 단위로 같게 만든다, ARC 슬롯 확인). 스텁 구문 검사: `sweet_rpmh.c` 원본과 새 버전 모두 경고 0, 오류 0. `SweetGPU.cpp` 경고 0, 오류 0 (SMMU와 통합 포함). 검사 스크립트: `check_s22_smmu` PASS (17항목), `check_s22_integrate` PASS, `check_s19` PASS. `check_s17`과 `check_s21_gmu`는 이 단계에서 대체되었다 (사유는 각 스크립트 머리말).
+- CI가 확인할 것:
+  1. `bsd/dev/sweet_rpmh.c` (C 파일): 새 정적 함수 `rh_send_cmds`, `rh_send`, `rh_send_arc`, `rh_lookup_slave`, `rh_arc_gate_open`, `rh_arc_level_verified`, 그리고 공개 함수 `sweet_rpmh_arc_vote`와 매크로 `RH_CMD_MAX`. 기대: 미사용 경고 없음, 0062 관련 경고 0.
+  2. `SweetGPU.cpp`와 `SweetSmmuV2.h`: `kIOReturnBadArgument`와 `kIOReturnExclusiveAccess`가 XNU `IOReturn.h`에 있는지, `IOMemoryDescriptor::withPhysicalAddress`, `createMappingInTask`, `getBytesNoCopy`, `IOBufferMemoryDescriptor::withOptions(IOOptionBits, vm_size_t, vm_offset_t)`의 시그니처, `extern "C" int sweet_rpmh_arc_vote`. 기대: `SweetGPU` 관련 경고 0.
+  3. `iokit/Kernel/arm/SweetSmmuPgtbl.h`는 `<stdint.h>`와 `<stddef.h>`를 include한다. 다른 커널 헤더는 `libkern`/`IOKit` 쪽이다. 실패하면 `uint64_t` 등을 `libkern/OSTypes.h`로 바꾼다.
+  4. 패치 수는 그대로다 (ours=84). 기대 요약: `applied=88 skipped=4 baseline_skipped=4 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`.
+- 로그 분석: `run-<RUN_ID>.txt`를 직접 지정한다. `ls -t`는 `.build-tail.txt`를 고른다.
+- push: 먼저 `git ls-remote fork refs/heads/ci-validate/v1`이 `ebf816e`인지 확인한다. 범위는 `ebf816e..HEAD`다 (세션 20 문서 `44c7503`, 세션 21 커밋 3개, 세션 22 커밋 4개). 명령은 `git push fork HEAD:ci-validate/v1`. 이 세션은 push하지 않았다.
+- 기기 쓰기·부팅: 없음.

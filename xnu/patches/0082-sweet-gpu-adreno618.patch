@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,93 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
@@ -26,6 +26,7 @@
 +#include <IOKit/IOService.h>
 +#include <IOKit/IOBufferMemoryDescriptor.h>
 +#include <IOKit/IOMemoryDescriptor.h>
++#include "SweetSmmuV2.h"
 +
 +/* One pwrlevel bin of sweet.dts gpu-pwrlevel-bins (table in SweetGPU.cpp). */
 +struct SweetGpuPwrBin {
@@ -50,6 +51,7 @@
 +	volatile uint32_t           *fQfpromRegs;   /* qfprom, dword indices (readFuse passes byteOff / 4) */
 +	volatile uint32_t           *fGpuccRegs;    /* gpucc, byte offsets from kGpuccPA (readGpucc passes byteOff / 4) */
 +	IOBufferMemoryDescriptor    *fRingBuf;      /* 32 KiB ring, physically contiguous */
++	SweetSmmuV2                 fSmmu;          /* GPU SMMU: page-table pool; sweetmmu=1 probe only (SweetSmmuV2.h) */
 +	const SweetGpuPwrBin        *fPwrBin;       /* table selected by speed bin */
 +	uint32_t                    fSpeedBin;
 +	uint32_t                    fRingWptr;
@@ -94,7 +96,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,794 @@
+@@ -0,0 +1,846 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -131,6 +133,28 @@
 +	int64_t value = 0;
 +	return PE_parse_boot_argn("sweetgpu", &value, (int)sizeof(value)) && value == 1;
 +}
++
++/* Boot-arg sweetrpmh=1 (exact value 1): ARC votes may be sent (sweet_rpmh_arc_vote, 0062). */
++static bool
++sweetRpmhGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetrpmh", &value, (int)sizeof(value)) && value == 1;
++}
++
++/* Boot-arg sweetmmu=1 (exact value 1), the same rule as sweetgpu=1. */
++static bool
++sweetMmuGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetmmu", &value, (int)sizeof(value)) && value == 1;
++}
++
++/* 0062 (sweet_rpmh.c): ARC vote. Refused (EPERM) for every level that is not verified yet. */
++extern "C" int sweet_rpmh_arc_vote(const char *res, uint32_t level);
++
++/* sweet.dts: qcom,init-voltage-level = <0x11> for gfx and cx. Its meaning is not verified (NOTES session 22). */
++static const uint32_t kInitVoltageLevelDt = 0x11;
 +
 +/*
 + * Reg windows: sweet.dts:17752 reg = <0x5000000 0x40000 0x5061000 0x800
@@ -475,6 +499,13 @@
 +		return false;
 +	}
 +
++	/* GPU SMMU page-table pool: memory only (SweetSmmuV2::allocateTables). No register access. */
++	if (fSmmu.allocateTables() != kIOReturnSuccess) {
++		printf("SWEET GPU: SMMU page-table pool failed\n");
++		teardown();
++		return false;
++	}
++
 +	/* Speed bin: a read of qfprom fuses, not of the GPU block. */
 +	fSpeedBin = (readFuse(kSpeedBinOff) & kSpeedBinMask) >> kSpeedBinShift;
 +	fPwrBin = selectPwrBin(fSpeedBin);
@@ -537,6 +568,7 @@
 +		fIrqRegistered = false;
 +	}
 +	OSSafeReleaseNULL(fRingBuf);
++	fSmmu.teardown();
 +	OSSafeReleaseNULL(fGmu);
 +	OSSafeReleaseNULL(fGpucc);
 +	OSSafeReleaseNULL(fQfprom);
@@ -604,12 +636,42 @@
 +IOReturn MsmGpuAdreno618::powerUpSequence(void)
 +{
 +	/*
++	 * ARC votes (Task E, session 22), only with sweetrpmh=1. They run before checkGxPowered():
++	 * GX is powered through its gfx.lvl vote (session 20 design), so a check that needed GX first
++	 * could never pass. cx.lvl goes first because the SMMU sits in the CX domain. Without the gate,
++	 * nothing is sent. sweet_rpmh_arc_vote refuses every level that is not verified (0062).
++	 */
++	if (sweetRpmhGateOpen()) {
++		static const char *const rails[] = { "cx.lvl", "gfx.lvl" };
++		for (unsigned i = 0; i < sizeof(rails) / sizeof(rails[0]); ++i) {
++			int err = sweet_rpmh_arc_vote(rails[i], kInitVoltageLevelDt);
++			if (err) {
++				printf("SWEET GPU: %s vote refused (errno %d); not started\n", rails[i], err);
++				return kIOReturnError;
++			}
++		}
++	}
++
++	/*
 +	 * The first GX access of this driver. Nothing below runs unless the GX GDSC
 +	 * reads as powered. checkGxPowered writes nothing.
 +	 */
 +	IOReturn gx = checkGxPowered();
 +	if (gx != kIOReturnSuccess) {
 +		return gx;
++	}
++
++	/*
++	 * GPU SMMU (Task E, session 22), only with sweetmmu=1. program() reads sIDR0 and sIDR1 and then
++	 * returns kIOReturnUnsupported, so power-up stops here and nothing is written. The SMMU sits in
++	 * the CX domain. Whether GX on implies CX on is not verified.
++	 */
++	if (sweetMmuGateOpen()) {
++		IOReturn smmu = fSmmu.program();
++		if (smmu != kIOReturnSuccess) {
++			printf("SWEET GPU: SMMU not programmed (%#x); not started\n", (unsigned)smmu);
++			return smmu;
++		}
 +	}
 +
 +	/*
@@ -780,14 +842,6 @@
 +
 +/* 256 KiB: the level-1 page plus 63 tables, enough for 4 KiB mappings in several 2 MiB regions. */
 +static const size_t kPoolBytes = 256 * 1024;
-+
-+/* Boot-arg sweetmmu=1 (exact value 1), the same rule as sweetgpu=1. */
-+static bool
-+sweetMmuGateOpen(void)
-+{
-+	int64_t value = 0;
-+	return PE_parse_boot_argn("sweetmmu", &value, (int)sizeof(value)) && value == 1;
-+}
 +
 +SweetSmmuV2::SweetSmmuV2(void)
 +    : fPool(NULL), fMmio(NULL), fTables(), fTablesReady(false)

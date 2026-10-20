@@ -8,7 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
-- **세션 22 (2026-10-20): SQE 형식 결정 (`has_whereami = true`, 업스트림 규칙과 `adreno_fw_create_bo` 오프셋 확인). 정정: 세션 19–20의 "dw0 = 0 구버전" 판정은 오프셋 오류였다. 기기 ARC 진단 (Task A)은 차단 (CI 빌드 없음, adb 셸 권한 거부). RPMh·SMMU·0082 통합 구현은 진행 중. 상세: '세션 22' 절.**
+- **세션 22 (2026-10-20): SQE 형식 결정 (`has_whereami = true`, 업스트림 규칙과 `adreno_fw_create_bo` 오프셋 확인). 정정: 세션 19–20의 "dw0 = 0 구버전" 판정은 오프셋 오류였다. 기기 ARC 진단 (Task A)은 차단 (CI 빌드 없음, adb 셸 권한 거부). RPMh 투표, SMMU 페이지 테이블, 0082 통합은 구현 완료 (게이트 뒤, 기본 꺼짐, 실기 미검증). 상세: '세션 22' 절.**
 - **세션 21 (2026-10-20): RPMh ARC 조회 `6a5a199` (`sweetrpmhq=1`, 읽기 전용), GMU 창 매핑 `c656f77` (읽기·쓰기 없음), gpu_region 위험 철회, `a618_gmu.bin` 로더 설계 (코드 없음). 체인 84/84, 로컬 검사 PASS. 기기 쓰기·부팅 없음. 다음 결정: 로더 운반 경로 (R1 RAM 페이로드 또는 R2 no-map 영역)와 XNU 예약 경로 확인. 승인 요청 (세션 22): ARC 부팅 진단 (권장 승인), SQE 조사용 인터넷 (승인 필요), 부팅 DT 진단 (권장 보류). 상세: '세션 21' 절.**
 - **세션 20 (2026-10-20): CI `39397002375` PASS 확인 (빌드 `ebf816e`). GMU 5단계 설계와 블로커 순서, RPMh ARC 확장 설계 (`gfx.lvl`·`cx.lvl`·`mx.lvl`). CX ON은 `cx.lvl` 투표가 먼저 필요하다. SQE 형식 미확정 (CP 기동 전 해결). 기기 gpu_region은 0x97f15000 (라이브 DT). 코드 변경 없음. 세션 21 승인 요청 3건. 상세: '세션 20' 절.**
 - **세션 19 (2026-10-20): NO_UPDATE 구현 (커밋 `a4b0469`, 승인 2).** `CP_RB_CNTL = 0x0800020C`. RPTR 섀도는 설정하지 않는다 (shadow 없음). A618 GMU는 `a618_gmu.bin`일 가능성이 높다 (추정). GX 켜기 설계는 Linux 기준 GMU 경로 (호스트 직접 GDSCR 해제는 Linux 선례 없음). XNU에는 RPMh 클라이언트가 있으나 `gfx.lvl` ARC 투표가 없다. SQE 형식과 gpu_region 불일치 (dtbo 오버레이) 조사. 상세: '세션 19' 절.
@@ -67,6 +67,30 @@
 - 확인한 상수 (출처: `android.googlesource.com/kernel/common` `drivers/iommu/arm/arm-smmu/arm-smmu.h`, WebFetch 발췌. 원문 대조는 아직 못 했다): `GR0_sCR0 0x0`, `sCR0_CLIENTPD BIT(0)`, `GR0_TLBIALLNSNH 0x68`, `GR0_sTLBGSYNC 0x70`, `GR0_sTLBGSTATUS 0x74`, `GR0_S2CR(n) 0xc00 + 4n`, `GR0_SMR(n) 0x800 + 4n`, `SMR_VALID BIT(31)`, `GR1_CBAR(n) 0x0 + 4n`, `GR1_CBA2R(n) 0x800 + 4n`, `CBA2R_VA64 BIT(0)`, `CB_SCTLR 0x0`, `SCTLR_M BIT(0)`, `SCTLR_CFRE BIT(5)`, `SCTLR_CFIE BIT(6)`, `SCTLR_CFCFG BIT(7)`, `SCTLR_HUPCF BIT(8)`, `CB_TTBR0 0x20`, `CB_CONTEXTIDR 0x34`, `CB_S1_MAIR0 0x38`, `CB_S1_TLBIVA 0x600`, `CB_S1_TLBIASID 0x610`, `CB_S1_TLBIVAL 0x620`, `S2CR_TYPE GENMASK(17,16)`, `CBAR_TYPE GENMASK(17,16)`.
 - 차단 해제 조건: `sweetmmu=1` 부팅 (승인 필요). 이 부팅에서 `sIDR0`/`sIDR1`을 읽어 컨텍스트 뱅크 기준 주소를 확정한다. 그 전에 SMMU 클록 (`gcc_gpu_memnoc_gfx_clk`)과 `vdd`가 켜져 있는지 알 수 없다. 꺼져 있으면 레지스터 읽기가 버스 오류가 되어 패닉할 수 있다. 그래서 이 부팅은 승인 항목이다.
 - 검사: 체인 84/84, `check_s22_smmu` PASS (17항목). 스텁 구문 검사 `SweetGPU.cpp` 경고 0, 오류 0. `check_s17`의 "`/ 4`는 두 번" 규칙과 `check_s21_gmu`의 "diff는 GMU만" 규칙은 이 단계에서 대체되었다 (검사 파일 머리말에 이유).
+
+**Task E: 0082 통합 (게이트 `sweetrpmh=1`, `sweetmmu=1`, 기본은 꺼짐).**
+- `start()`: 게이트가 열린 경로에서 GMU 매핑 뒤에 `fSmmu.allocateTables()`를 호출한다 (메모리만). 실패하면 시작하지 않는다.
+- `powerUpSequence()` 맨 앞: `sweetrpmh=1`이면 `cx.lvl`, `gfx.lvl`을 `kInitVoltageLevelDt` (DT `qcom,init-voltage-level = <0x11>`, `sweet.dts:12963`, `13027`) 값으로 투표한다. 하나라도 거부되면 `kIOReturnError`로 멈춘다.
+- `checkGxPowered()` 뒤: `sweetmmu=1`이면 `fSmmu.program()`을 호출한다. 이 함수는 `sIDR0`/`sIDR1`을 읽고 `kIOReturnUnsupported`를 돌려주므로 시작은 여기서 멈춘다. 쓰기는 없다.
+- `teardown()`: `fSmmu.teardown()`.
+- 두 게이트를 열어도 레지스터 쓰기는 일어나지 않는다. 투표는 검증된 표가 없어 `EPERM`으로 거부되고, SMMU는 `kIOReturnUnsupported`로 멈춘다 (확인됨: 코드 경로 읽기).
+- **주문 편차 (프롬프트와 다름).** 프롬프트는 "`checkGxPowered()` 통과 전에는 ARC 투표를 하지 않는다"고 했다. 그러나 GX는 `gfx.lvl` 투표로 전원이 들어간다 (세션 20 설계, GX 부모 공급). 이 규칙을 따르면 GX는 영원히 켜지지 않는다. 그래서 투표는 `checkGxPowered()` 앞에 두었다. SMMU 읽기는 `checkGxPowered()` 뒤에 두었다.
+- **ITCM IOVA 매핑은 구현하지 않았다.** 프롬프트는 "`sweetmmu=1`일 때 ITCM 로드 영역을 `mapIova`로 매핑"이라고 했다. ITCM은 GPU가 DMA로 읽지 않는다. 호스트가 GMU 창을 통해 MMIO로 쓴다 (세션 20 5단계 3a). 따라서 SMMU 매핑이 필요 없다. IOVA 매핑이 필요한 것은 HFI 큐 테이블과 큐다 (세션 20 3b). 그 전에 B3 (HFI 레이아웃)이 필요하다.
+- 검사: 체인 84/84, `check_s22_smmu` PASS (17항목), `check_s22_integrate` PASS (게이트 이름과 값, 호출 순서, `mapIova` 호출 없음, 추가된 레지스터 쓰기 없음). 스텁 구문 검사 `SweetGPU.cpp` 경고 0, 오류 0. XNU SDK에서는 컴파일하지 않았다. CI가 확인한다.
+- 기기: 실행 없음.
+
+**세션 23 승인 요청 (대기).**
+1. **`sweetrpmhq=1` 기기 부팅 (ARC 조회, 읽기 전용).** 투표 없음. 필요: CI 빌드 (`6a5a199` 이후 커널) 또는 push. 그리고 기기 읽기 권한 (adb 셸). **권장: 승인.**
+2. **`sweetmmu=1` 기기 부팅 (`sIDR0`/`sIDR1` 읽기).** 쓰기는 없다. 그러나 SMMU 클록 (`gcc_gpu_memnoc_gfx_clk`)과 `vdd`의 상태를 모른다. 꺼져 있으면 읽기가 버스 오류가 되어 패닉할 수 있다. **권장: 클록 상태를 `sweetrpmhq=1` 부팅 전에 먼저 확인한 뒤 승인.**
+3. **SQE 형식의 Android KGSL 소스 확인 (인터넷).** `has_whereami = true`는 업스트림 규칙으로 정해졌다 (커밋 `e6d9e33`). KGSL은 읽지 않았다. **승인 필요, 우선순위 낮음.**
+4. **부팅 DT 진단 (`sweetbootdiag=1`).** 세션 21 판단대로 **보류**.
+5. **`gpu_region` ADT 항목.** 철회 (세션 21 Task A).
+
+**커밋.**
+- `e6d9e33` sqe: a630_sqe.fw 수락 결정 (`has_whereami = true`)
+- `13b275e` rpmh: ARC gfx.lvl/cx.lvl 투표 (게이트 `sweetrpmh=1`, 검증 전 거부)
+- `562cf27` smmu: SweetSmmuV2 페이지 테이블과 `sweetmmu=1` 읽기 전용 점검 (쓰기 없음)
+- 0082 통합 커밋 (이 절과 CI-PRECHECK.md 세션 22)
 
 ### 세션 21 (2026-10-20): ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), gpu_region 위험 철회, a618 로더 설계 (기기 쓰기 없음)
 
