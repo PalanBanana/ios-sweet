@@ -94,7 +94,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,653 @@
+@@ -0,0 +1,794 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -114,6 +114,7 @@
 +#include <kern/task.h>
 +#include <pexpert/pexpert.h>
 +#include "SweetGPU.h"
++#include "SweetSmmuV2.h"
 +
 +#define super IOService
 +OSDefineMetaClassAndStructors(MsmGpuAdreno618, IOService)
@@ -747,7 +748,374 @@
 +	super::free();
 +}
 +
++/*
++ * SMMU v2 for the GPU (session 22, Task D). Class in SweetSmmuV2.h, page tables in
++ * SweetSmmuPgtbl.h. Only the page-table pool and mapIova() touch memory. program() reads SMMU
++ * registers, and only behind sweetmmu=1. It writes nothing.
++ */
++
++/*
++ * DT facts. sweet.dts:10592 reg = <0x5040000 0x10000>. The iommus specifiers <0x1cd N> (N is the
++ * stream ID) are GPU at 18215 and 18222 and GMU at 18263 and 18269. The clocks (clock-names
++ * gcc_gpu_memnoc_gfx_clk, sweet.dts:10601-10602) and the vdd supply (10598-10599) must be on
++ * before any register access. This driver does not enable them, which is one reason program()
++ * refuses to write.
++ */
++static const uint64_t kSmmuPA = 0x5040000;
++static const uint64_t kSmmuBytes = 0x10000;
++static const uint32_t kSidGpu[] = { 0x00, 0x02 };
++static const uint32_t kSidGmu[] = { 0x04, 0x05 };
++static const uint32_t kGr0Id0 = 0x20;   /* sIDR0, SMMUv2 global register space 0. Not checked against arm-smmu.h. */
++static const uint32_t kGr0Id1 = 0x24;   /* sIDR1, same. */
++
++/*
++ * attach-impl-defs (sweet.dts:10603): implementation-defined register offset and value pairs. Linux
++ * writes them when the SMMU is attached. They are listed here and not written yet.
++ */
++static const uint32_t kAttachImplDef[][2] = {
++	{ 0x6000, 0x2378 }, { 0x6060, 0x1055 }, { 0x678c, 0x08 },       { 0x6794, 0x28 },
++	{ 0x6800, 0x06 },   { 0x6900, 0x3ff },  { 0x6924, 0x204 },      { 0x6928, 0x11000 },
++	{ 0x6930, 0x800 },  { 0x6960, 0xffffffff }, { 0x6b64, 0x1a5551 }, { 0x6b68, 0x9a82a382 },
++};
++
++/* 256 KiB: the level-1 page plus 63 tables, enough for 4 KiB mappings in several 2 MiB regions. */
++static const size_t kPoolBytes = 256 * 1024;
++
++/* Boot-arg sweetmmu=1 (exact value 1), the same rule as sweetgpu=1. */
++static bool
++sweetMmuGateOpen(void)
++{
++	int64_t value = 0;
++	return PE_parse_boot_argn("sweetmmu", &value, (int)sizeof(value)) && value == 1;
++}
++
++SweetSmmuV2::SweetSmmuV2(void)
++    : fPool(NULL), fMmio(NULL), fTables(), fTablesReady(false)
++{
++}
++
++IOReturn
++SweetSmmuV2::allocateTables(void)
++{
++	if (fTablesReady) {
++		return kIOReturnSuccess;
++	}
++	fPool = IOBufferMemoryDescriptor::withOptions(kIODirectionInOut | kIOMemoryPhysicallyContiguous,
++	    kPoolBytes, page_size);
++	if (!fPool) {
++		return kIOReturnNoMemory;
++	}
++	fTables.va = static_cast<uint64_t *>(fPool->getBytesNoCopy());
++	fTables.pa = (uint64_t)fPool->getPhysicalAddress();
++	fTables.bytes = kPoolBytes;
++	fTables.used = 0;
++	if (sweet_pgt_init(&fTables) != kSweetPgtOk) {
++		printf("SWEET SMMU: page-table pool rejected (pa=%#llx)\n", (unsigned long long)fTables.pa);
++		OSSafeReleaseNULL(fPool);
++		fTables = SweetPgtPool();
++		return kIOReturnError;
++	}
++	fTablesReady = true;
++	printf("SWEET SMMU: page-table pool pa=%#llx bytes=%u\n", (unsigned long long)fTables.pa,
++	    (unsigned)kPoolBytes);
++	return kIOReturnSuccess;
++}
++
++IOReturn
++SweetSmmuV2::mapIova(uint64_t iova, IOPhysicalAddress pa, size_t len)
++{
++	/* Memory only: no SMMU register is touched, with or without sweetmmu=1. */
++	if (!fTablesReady) {
++		return kIOReturnNotReady;
++	}
++	switch (sweet_pgt_map_range(&fTables, iova, (uint64_t)pa, (uint64_t)len)) {
++	case kSweetPgtOk:
++		return kIOReturnSuccess;
++	case kSweetPgtNoMemory:
++		return kIOReturnNoMemory;
++	case kSweetPgtExists:
++		return kIOReturnExclusiveAccess;
++	case kSweetPgtRange:
++	case kSweetPgtAlign:
++		return kIOReturnBadArgument;
++	default:
++		return kIOReturnError;
++	}
++}
++
++IOReturn
++SweetSmmuV2::program(void)
++{
++	if (!sweetMmuGateOpen()) {
++		printf("SWEET SMMU: sweetmmu=1 not set; no SMMU access\n");
++		return kIOReturnOffline;
++	}
++	/* Reads only. The block is mapped by physical address, which is not a register access. */
++	if (!fMmio) {
++		IOMemoryDescriptor *desc = IOMemoryDescriptor::withPhysicalAddress(kSmmuPA, kSmmuBytes, kIODirectionInOut);
++		if (!desc) {
++			return kIOReturnNoMemory;
++		}
++		fMmio = desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapInhibitCache);
++		OSSafeReleaseNULL(desc);
++		if (!fMmio) {
++			printf("SWEET SMMU: block pa=%#llx map failed\n", (unsigned long long)kSmmuPA);
++			return kIOReturnNoMemory;
++		}
++	}
++	volatile uint32_t *regs = (volatile uint32_t *)fMmio->getVirtualAddress();
++	printf("SWEET SMMU: sIDR0=%#x sIDR1=%#x (reads only, pools %s)\n", regs[kGr0Id0 / 4], regs[kGr0Id1 / 4],
++	    fTablesReady ? "ready" : "not allocated");
++	for (unsigned i = 0; i < sizeof(kSidGpu) / sizeof(kSidGpu[0]); ++i) {
++		printf("SWEET SMMU: GPU stream %#x (planned, not written)\n", kSidGpu[i]);
++	}
++	for (unsigned i = 0; i < sizeof(kSidGmu) / sizeof(kSidGmu[0]); ++i) {
++		printf("SWEET SMMU: GMU stream %#x (planned, not written)\n", kSidGmu[i]);
++	}
++	for (unsigned i = 0; i < sizeof(kAttachImplDef) / sizeof(kAttachImplDef[0]); ++i) {
++		printf("SWEET SMMU: attach-impl-def %#x=%#x (not written)\n", kAttachImplDef[i][0], kAttachImplDef[i][1]);
++	}
++	printf("SWEET SMMU: stream mapping and context banks not implemented (layout unverified); no writes\n");
++	return kIOReturnUnsupported;
++}
++
++void
++SweetSmmuV2::teardown(void)
++{
++	OSSafeReleaseNULL(fMmio);
++	OSSafeReleaseNULL(fPool);
++	fTables = SweetPgtPool();
++	fTablesReady = false;
++}
++
 +#endif /* SWEET */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetSmmuPgtbl.h
+@@ -0,0 +1,188 @@
++/*
++ * SWEET: LPAE stage-1 page tables for the GPU SMMU (see SweetSmmuV2.h). Pure C++ with no
++ * IOKit, so the host test in session 22 compiles this same file.
++ *
++ * Format: 32-bit IOVA, 3 levels, 4 KiB granule. kgsl_smmu asks for 3-level tables
++ * (qcom,use-3-lvl-tables, sweet.dts:10595). Level 1 has 4 entries (1 GiB each); levels 2 and 3
++ * have 512 entries (2 MiB and 4 KiB). Descriptor bits (LPAE long format):
++ *   bits 1:0   0b11 = table (levels 1 and 2) or page (level 3)
++ *   bits 4:2   AttrIndx 0 (MAIR attribute 0, normal memory)
++ *   bits 7:6   AP 0 (read-write)
++ *   bits 9:8   SH 3 (inner shareable)
++ *   bit 10     AF (access flag)
++ *   bits 39:12 output address (40-bit physical)
++ *   bit 54     XN
++ * The tables live in one physically contiguous pool. The first 4 KiB page is the level-1 table.
++ * It is 4 KiB aligned, which covers the 32-byte alignment that TTBR0 needs. The rest of the pool
++ * is handed out as 4 KiB tables, zeroed when allocated.
++ */
++#ifndef _SWEET_SMMU_PGTBL_H_
++#define _SWEET_SMMU_PGTBL_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++enum SweetPgtStatus {
++	kSweetPgtOk = 0,
++	kSweetPgtNoMemory,
++	kSweetPgtExists,
++	kSweetPgtAlign,
++	kSweetPgtRange,
++	kSweetPgtBadPool,
++	kSweetPgtUnmapped,
++};
++
++#define SWEET_PGT_PAGE       4096u
++#define SWEET_PGT_ENTRIES    512u
++#define SWEET_PGT_OA_MASK    0x000000fffffff000ull     /* bits 39:12 */
++#define SWEET_PGT_TABLE      0x3ull                    /* table descriptor, levels 1 and 2 */
++#define SWEET_PGT_PAGE_ATTR  ((1ull << 10) | (3ull << 8) | 0x3ull | (1ull << 54))
++
++struct SweetPgtPool {
++	uint64_t *va;     /* CPU address of the pool */
++	uint64_t pa;      /* physical address of the pool, 4 KiB aligned */
++	size_t bytes;     /* pool size: a multiple of 4 KiB, at least 8 KiB */
++	size_t used;      /* bytes handed out so far; the level-1 page is the first 4 KiB */
++};
++
++static inline int
++sweet_pgt_init(SweetPgtPool *p)
++{
++	if (!p->va || (p->pa & (SWEET_PGT_PAGE - 1)) || p->bytes < 2 * SWEET_PGT_PAGE ||
++	    (p->bytes & (SWEET_PGT_PAGE - 1))) {
++		return kSweetPgtBadPool;
++	}
++	for (unsigned i = 0; i < SWEET_PGT_ENTRIES; ++i) {
++		p->va[i] = 0;
++	}
++	p->used = SWEET_PGT_PAGE;
++	return kSweetPgtOk;
++}
++
++/* A table descriptor must point into the part of the pool that has been handed out. */
++static inline uint64_t *
++sweet_pgt_table_va(const SweetPgtPool *p, uint64_t descriptor)
++{
++	uint64_t tpa = descriptor & SWEET_PGT_OA_MASK;
++	if (tpa < p->pa || tpa >= p->pa + p->used || (tpa & (SWEET_PGT_PAGE - 1))) {
++		return NULL;
++	}
++	return p->va + (tpa - p->pa) / sizeof(uint64_t);
++}
++
++static inline int
++sweet_pgt_alloc(SweetPgtPool *p, uint64_t **va, uint64_t *pa)
++{
++	if (p->bytes - p->used < SWEET_PGT_PAGE) {
++		return kSweetPgtNoMemory;
++	}
++	*va = p->va + p->used / sizeof(uint64_t);
++	*pa = p->pa + p->used;
++	for (unsigned i = 0; i < SWEET_PGT_ENTRIES; ++i) {
++		(*va)[i] = 0;
++	}
++	p->used += SWEET_PGT_PAGE;
++	return kSweetPgtOk;
++}
++
++/* Maps one 4 KiB page. Only the entry it writes changes; a page that is already mapped is refused. */
++static inline int
++sweet_pgt_map_page(SweetPgtPool *p, uint64_t iova, uint64_t pa)
++{
++	if ((iova >> 32) || (pa >> 40)) {
++		return kSweetPgtRange;
++	}
++	if ((iova | pa) & (SWEET_PGT_PAGE - 1)) {
++		return kSweetPgtAlign;
++	}
++	uint64_t *l1 = p->va;
++	uint64_t *l2 = NULL, *l3 = NULL;
++	uint64_t tpa = 0;
++	unsigned i1 = (unsigned)(iova >> 30);
++	if (l1[i1] == 0) {
++		int r = sweet_pgt_alloc(p, &l2, &tpa);
++		if (r) {
++			return r;
++		}
++		l1[i1] = (tpa & SWEET_PGT_OA_MASK) | SWEET_PGT_TABLE;
++	} else {
++		l2 = sweet_pgt_table_va(p, l1[i1]);
++		if (!l2) {
++			return kSweetPgtBadPool;
++		}
++	}
++	unsigned i2 = (unsigned)((iova >> 21) & 0x1ffu);
++	if (l2[i2] == 0) {
++		int r = sweet_pgt_alloc(p, &l3, &tpa);
++		if (r) {
++			return r;
++		}
++		l2[i2] = (tpa & SWEET_PGT_OA_MASK) | SWEET_PGT_TABLE;
++	} else {
++		l3 = sweet_pgt_table_va(p, l2[i2]);
++		if (!l3) {
++			return kSweetPgtBadPool;
++		}
++	}
++	unsigned i3 = (unsigned)((iova >> 12) & 0x1ffu);
++	if (l3[i3] != 0) {
++		return kSweetPgtExists;
++	}
++	l3[i3] = (pa & SWEET_PGT_OA_MASK) | SWEET_PGT_PAGE_ATTR;
++	return kSweetPgtOk;
++}
++
++/*
++ * Maps len bytes (a multiple of 4 KiB). On an error the pages mapped before it stay mapped;
++ * the caller decides whether to unmap them (there is no unmap yet).
++ */
++static inline int
++sweet_pgt_map_range(SweetPgtPool *p, uint64_t iova, uint64_t pa, uint64_t len)
++{
++	if (!len || (len & (SWEET_PGT_PAGE - 1))) {
++		return kSweetPgtAlign;
++	}
++	for (uint64_t off = 0; off < len; off += SWEET_PGT_PAGE) {
++		int r = sweet_pgt_map_page(p, iova + off, pa + off);
++		if (r) {
++			return r;
++		}
++	}
++	return kSweetPgtOk;
++}
++
++/*
++ * Software walk over the same descriptors the SMMU reads: kSweetPgtOk and the PA (with the offset
++ * inside the page), kSweetPgtUnmapped for a hole, kSweetPgtBadPool for a broken table pointer.
++ */
++static inline int
++sweet_pgt_walk(const SweetPgtPool *p, uint64_t iova, uint64_t *pa_out)
++{
++	if (iova >> 32) {
++		return kSweetPgtRange;
++	}
++	uint64_t d1 = p->va[(unsigned)(iova >> 30)];
++	if (!d1) {
++		return kSweetPgtUnmapped;
++	}
++	const uint64_t *l2 = sweet_pgt_table_va(p, d1);
++	if (!l2) {
++		return kSweetPgtBadPool;
++	}
++	uint64_t d2 = l2[(unsigned)((iova >> 21) & 0x1ffu)];
++	if (!d2) {
++		return kSweetPgtUnmapped;
++	}
++	const uint64_t *l3 = sweet_pgt_table_va(p, d2);
++	if (!l3) {
++		return kSweetPgtBadPool;
++	}
++	uint64_t d3 = l3[(unsigned)((iova >> 12) & 0x1ffu)];
++	if (!(d3 & 0x3ull)) {
++		return kSweetPgtUnmapped;
++	}
++	*pa_out = (d3 & SWEET_PGT_OA_MASK) | (iova & (SWEET_PGT_PAGE - 1));
++	return kSweetPgtOk;
++}
++
++#endif /* _SWEET_SMMU_PGTBL_H_ */
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetSmmuV2.h
+@@ -0,0 +1,33 @@
++/*
++ * SWEET: GPU SMMU (kgsl_smmu, sweet.dts:10589), an SMMU v2 for the Adreno 618. Session 22 stage
++ * (NOTES.md session 22, Task D):
++ *   allocateTables()  the physically contiguous pool for the page tables. No register access.
++ *   mapIova()         writes page-table entries in that pool. No register access.
++ *   program()         sweetmmu=1 only. Maps the block and reads sIDR0 and sIDR1 (reads only), then
++ *                     returns kIOReturnUnsupported. Stream mapping and context-bank writes are not
++ *                     implemented: the context-bank layout (sIDR1 page size and count) is not verified.
++ * The page tables are LPAE, 32-bit IOVA, 3 levels, 4 KiB granule (SweetSmmuPgtbl.h).
++ */
++#ifndef _SWEET_SMMU_V2_H_
++#define _SWEET_SMMU_V2_H_
++
++#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/IOMemoryDescriptor.h>
++#include "SweetSmmuPgtbl.h"
++
++class SweetSmmuV2 {
++public:
++	SweetSmmuV2(void);
++	IOReturn allocateTables(void);
++	IOReturn mapIova(uint64_t iova, IOPhysicalAddress pa, size_t len);
++	IOReturn program(void);
++	void     teardown(void);
++
++private:
++	IOBufferMemoryDescriptor    *fPool;         /* page-table pool, physically contiguous */
++	IOMemoryMap                 *fMmio;         /* kgsl_smmu block, mapped by physical address, only by program() */
++	SweetPgtPool                fTables;
++	bool                        fTablesReady;
++};
++
++#endif /* _SWEET_SMMU_V2_H_ */
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
 @@ -22,1 +22,2 @@

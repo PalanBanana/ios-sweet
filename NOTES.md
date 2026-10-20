@@ -58,6 +58,16 @@
 - 검증 (로컬): (1) 스텁 구문 검사에서 원본과 새 버전 모두 경고 0, 오류 0. (2) 호스트 하네스 (세션 스크래치패드 `t22/`, 테스트 전용 복사본: aarch64 배리어 제거, TCS 완료 시뮬레이션): 원본 VRM과 새 VRM 경로가 같은 입력에서 TCS 메모리를 바이트 단위로 같게 만든다. ARC 슬롯은 `msgid 0x10108`, `addr = 주소`, `data = 0x11`이고 나머지 슬롯과 TCS1은 그대로다. (3) 체인 84/84.
 - 미검증: 기기에서의 cmd-db 조회, ARC 주소 형식 (`addr >> 16 == 3`과 16바이트 정렬은 가정이다), TCS의 ARC 응답, 레일 전압 변화. 기기 실행은 승인이 필요하다.
 
+**Task D: SMMU v2 (`SweetSmmuV2`). 쓰기 없음. 1단계: 페이지 테이블과 읽기 전용 점검.**
+- 구조: 클래스 선언은 `SweetSmmuV2.h`, 구현은 `SweetGPU.cpp`의 `SWEET` 가드 안에 있다. 페이지 테이블 순수 코드는 `SweetSmmuPgtbl.h` (IOKit 없음). `files.arm64`에는 항목을 넣지 않았다. `SweetGPU.cpp` 바로 뒤에 항목을 넣으면 0083의 `files.arm64` 헝크 (`-23,1`, 그 줄을 기준으로 한다)가 적용되지 않는다 (확인됨: 체인 실패로 확인).
+- DT 사실 (확인됨): `kgsl_smmu` `arm,smmu-kgsl@5040000` (`sweet.dts:10589`), `reg = <0x5040000 0x10000>`, `qcom,smmu-v2`, `qcom,use-3-lvl-tables`, `qcom,disable-atos`, `vdd-supply` (10598–10599행), 클록 `gcc_gpu_memnoc_gfx_clk` (10601–10602행). 스트림 ID는 GPU `0x00`, `0x02` (18215, 18222행), GMU `0x04`, `0x05` (18263, 18269행). `attach-impl-defs` 12쌍 (10603행)은 상수로만 두었고 쓰지 않는다.
+- 페이지 테이블 (LPAE, 32비트 IOVA, 3단계, 4 KiB): `allocateTables()`는 256 KiB 연속 메모리를 할당한다. `mapIova()`는 메모리만 쓴다. 호스트 테스트 (세션 스크래치패드 `t22/t22-pgt-test.cpp`, 실제 헤더를 `-Werror`로 컴파일): 통과. 기술자 비트 (AF, SH, AttrIndx 0, AP 0, XN), 중복 매핑 거부, 4 GiB 이상과 40비트 PA 초과 거부, 정렬 거부, 풀 소진 (`kSweetPgtNoMemory`), 최상위 IOVA (L1 인덱스 3)를 확인했다.
+- `program()`은 `sweetmmu=1`에서만 동작한다. 블록을 물리 주소로 매핑하고 `sIDR0` (GR0 0x20), `sIDR1` (GR0 0x24)을 읽어 출력한 뒤, 예약된 스트림 ID와 `attach-impl-defs`를 출력만 하고 `kIOReturnUnsupported`를 돌려준다. 스트림 매핑과 컨텍스트 뱅크 쓰기는 구현하지 않았다.
+- 미확정 (차단): (a) `sIDR1`의 페이지 크기와 개수 필드, 그리고 컨텍스트 뱅크 기준 주소 `ARM_SMMU_CB(s, n) = numpage + n`의 `numpage` 계산식. (b) TTBCR/TTBCR2의 비트 배치. (c) CBAR와 S2CR의 TYPE 값 (열거형 멤버라서 WebFetch 발췌에 없었다). (d) `ARM_SMMU_SMR_MASK`가 `GENMASK(31, 16)`로 보이는데 `SMR_VALID`와 겹친다. 그래서 마스크를 0으로 쓰는 것이 안전하다 (확인 필요).
+- 확인한 상수 (출처: `android.googlesource.com/kernel/common` `drivers/iommu/arm/arm-smmu/arm-smmu.h`, WebFetch 발췌. 원문 대조는 아직 못 했다): `GR0_sCR0 0x0`, `sCR0_CLIENTPD BIT(0)`, `GR0_TLBIALLNSNH 0x68`, `GR0_sTLBGSYNC 0x70`, `GR0_sTLBGSTATUS 0x74`, `GR0_S2CR(n) 0xc00 + 4n`, `GR0_SMR(n) 0x800 + 4n`, `SMR_VALID BIT(31)`, `GR1_CBAR(n) 0x0 + 4n`, `GR1_CBA2R(n) 0x800 + 4n`, `CBA2R_VA64 BIT(0)`, `CB_SCTLR 0x0`, `SCTLR_M BIT(0)`, `SCTLR_CFRE BIT(5)`, `SCTLR_CFIE BIT(6)`, `SCTLR_CFCFG BIT(7)`, `SCTLR_HUPCF BIT(8)`, `CB_TTBR0 0x20`, `CB_CONTEXTIDR 0x34`, `CB_S1_MAIR0 0x38`, `CB_S1_TLBIVA 0x600`, `CB_S1_TLBIASID 0x610`, `CB_S1_TLBIVAL 0x620`, `S2CR_TYPE GENMASK(17,16)`, `CBAR_TYPE GENMASK(17,16)`.
+- 차단 해제 조건: `sweetmmu=1` 부팅 (승인 필요). 이 부팅에서 `sIDR0`/`sIDR1`을 읽어 컨텍스트 뱅크 기준 주소를 확정한다. 그 전에 SMMU 클록 (`gcc_gpu_memnoc_gfx_clk`)과 `vdd`가 켜져 있는지 알 수 없다. 꺼져 있으면 레지스터 읽기가 버스 오류가 되어 패닉할 수 있다. 그래서 이 부팅은 승인 항목이다.
+- 검사: 체인 84/84, `check_s22_smmu` PASS (17항목). 스텁 구문 검사 `SweetGPU.cpp` 경고 0, 오류 0. `check_s17`의 "`/ 4`는 두 번" 규칙과 `check_s21_gmu`의 "diff는 GMU만" 규칙은 이 단계에서 대체되었다 (검사 파일 머리말에 이유).
+
 ### 세션 21 (2026-10-20): ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), gpu_region 위험 철회, a618 로더 설계 (기기 쓰기 없음)
 
 **전제.** 시작 HEAD `44c7503`. 세션 커밋 한도 3개: `6a5a199` (0062-ext), `c656f77` (0082 GMU 매핑), 이 문서 커밋. 폰에 쓰지 않았고 부팅하지 않았다. `sweetgpu=1`, `/dev/mem`, 레지스터 쓰기, push, gh 없음. 패치 체인 워크트리는 `~/refs/xnu-sweet`.
