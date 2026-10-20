@@ -1,14 +1,15 @@
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,91 @@
 +/*
 + * SWEET: Adreno 618 (SM7150, a6xx) bring-up driver for XNU IOKit.
 + *
 + * Values come from sweet.dts (GPU node, lines 17748-18197; cited in SweetGPU.cpp)
 + * and from Mesa a6xx.xml and Linux a6xx_gpu.c. start() maps the GPU window
 + * only. With boot-arg sweetgpu=1 it also maps cx_dbgc, cx_misc and qfprom,
-+ * maps gpucc by physical address to read the GX GDSC (reads only), reads the
-+ * speed bin from qfprom, and writes RBBM and CP registers (reset, interrupt
++ * maps gpucc by physical address to read the GX GDSC (reads only), maps the
++ * GMU register block by physical address (no access), reads the speed bin
++ * from qfprom, and writes RBBM and CP registers (reset, interrupt
 + * mask, SECVID, ring base, CP_PROTECT). No zap is loaded. The
 + * DT zap node is not a child of the GPU node, so Linux takes its -ENODEV path
 + * for this DT, and this driver does the same.
@@ -44,6 +45,7 @@
 +	IOMemoryMap                 *fCxMisc;       /* reg window 2: cx_misc */
 +	IOMemoryMap                 *fQfprom;       /* reg window 3: qfprom (fuses) */
 +	IOMemoryMap                 *fGpucc;        /* gpucc, mapped by physical address (GX GDSC), not an ADT window */
++	IOMemoryMap                 *fGmu;          /* GMU register block (sweet.dts:18230), mapping only, not accessed yet */
 +	volatile uint32_t           *fRegs;         /* GPU block, dword indices */
 +	volatile uint32_t           *fQfpromRegs;   /* qfprom, dword indices (readFuse passes byteOff / 4) */
 +	volatile uint32_t           *fGpuccRegs;    /* gpucc, byte offsets from kGpuccPA (readGpucc passes byteOff / 4) */
@@ -92,7 +94,7 @@
 +#endif /* _SWEET_GPU_ADRENO618_H_ */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGPU.cpp
-@@ -0,0 +1,630 @@
+@@ -0,0 +1,653 @@
 +/*
 + * SWEET: Adreno 618 bring-up (see SweetGPU.h).
 + *
@@ -256,6 +258,18 @@
 +static_assert(kGdscCfgOff == kGdscOff + 4, "CFG_GDSCR is GDSCR + 0x4 (gdsc.c:35)");
 +
 +/*
++ * GMU register block: mapped by physical address, not accessed (session 21, Task C).
++ * sweet.dts:18230 gmu node (qcom,gmu@506a000), reg-names[0] "kgsl_gmu_reg" =
++ * <0x506a000 0x31000>. The PDC ranges 0xb290000 and 0xb490000 are not mapped here.
++ * The start is 4 KiB aligned but not 16 KiB aligned, and this port uses 16 KiB pages
++ * (NOTES.md, Milestone 3). Check the VA printed by mapPhysical against the PA before
++ * any GMU access.
++ */
++static const uint64_t kGmuPA = 0x506a000;
++static const uint64_t kGmuBytes = 0x31000;
++static_assert(kGmuPA + kGmuBytes <= 0xB290000, "GMU block ends below the PDC ranges (sweet.dts:18230)");
++
++/*
 + * a630_protect_regs (Linux a6xx_catalog.c:508-541), the table of both 0x06010800
 + * catalog entries (a6xx_catalog.c:777, :802). A6XX_PROTECT_RDONLY = len << 18 | reg,
 + * A6XX_PROTECT_NORDWR = 1 << 31 | len << 18 | reg (a6xx_gpu.h:228-238). Entry 31 is
@@ -391,6 +405,7 @@
 +	fCxMisc = NULL;
 +	fQfprom = NULL;
 +	fGpucc = NULL;
++	fGmu = NULL;
 +	fRegs = NULL;
 +	fQfpromRegs = NULL;
 +	fGpuccRegs = NULL;
@@ -449,6 +464,15 @@
 +		return false;
 +	}
 +	fGpuccRegs = (volatile uint32_t *)fGpucc->getVirtualAddress();
++
++	/*
++	 * GMU register block (sweet.dts:18230, kgsl_gmu_reg). Mapping only: nothing in this
++	 * driver reads or writes the GMU yet, so no GMU state changes here.
++	 */
++	if (!mapPhysical(kGmuPA, kGmuBytes, &fGmu, "gmu (mapping only)")) {
++		teardown();
++		return false;
++	}
 +
 +	/* Speed bin: a read of qfprom fuses, not of the GPU block. */
 +	fSpeedBin = (readFuse(kSpeedBinOff) & kSpeedBinMask) >> kSpeedBinShift;
@@ -512,6 +536,7 @@
 +		fIrqRegistered = false;
 +	}
 +	OSSafeReleaseNULL(fRingBuf);
++	OSSafeReleaseNULL(fGmu);
 +	OSSafeReleaseNULL(fGpucc);
 +	OSSafeReleaseNULL(fQfprom);
 +	OSSafeReleaseNULL(fCxMisc);
