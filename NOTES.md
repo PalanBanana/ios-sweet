@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 22 (2026-10-20): SQE 형식 결정 (`has_whereami = true`, 업스트림 규칙과 `adreno_fw_create_bo` 오프셋 확인). 정정: 세션 19–20의 "dw0 = 0 구버전" 판정은 오프셋 오류였다. 기기 ARC 진단 (Task A)은 차단 (CI 빌드 없음, adb 셸 권한 거부). RPMh·SMMU·0082 통합 구현은 진행 중. 상세: '세션 22' 절.**
 - **세션 21 (2026-10-20): RPMh ARC 조회 `6a5a199` (`sweetrpmhq=1`, 읽기 전용), GMU 창 매핑 `c656f77` (읽기·쓰기 없음), gpu_region 위험 철회, `a618_gmu.bin` 로더 설계 (코드 없음). 체인 84/84, 로컬 검사 PASS. 기기 쓰기·부팅 없음. 다음 결정: 로더 운반 경로 (R1 RAM 페이로드 또는 R2 no-map 영역)와 XNU 예약 경로 확인. 승인 요청 (세션 22): ARC 부팅 진단 (권장 승인), SQE 조사용 인터넷 (승인 필요), 부팅 DT 진단 (권장 보류). 상세: '세션 21' 절.**
 - **세션 20 (2026-10-20): CI `39397002375` PASS 확인 (빌드 `ebf816e`). GMU 5단계 설계와 블로커 순서, RPMh ARC 확장 설계 (`gfx.lvl`·`cx.lvl`·`mx.lvl`). CX ON은 `cx.lvl` 투표가 먼저 필요하다. SQE 형식 미확정 (CP 기동 전 해결). 기기 gpu_region은 0x97f15000 (라이브 DT). 코드 변경 없음. 세션 21 승인 요청 3건. 상세: '세션 20' 절.**
 - **세션 19 (2026-10-20): NO_UPDATE 구현 (커밋 `a4b0469`, 승인 2).** `CP_RB_CNTL = 0x0800020C`. RPTR 섀도는 설정하지 않는다 (shadow 없음). A618 GMU는 `a618_gmu.bin`일 가능성이 높다 (추정). GX 켜기 설계는 Linux 기준 GMU 경로 (호스트 직접 GDSCR 해제는 Linux 선례 없음). XNU에는 RPMh 클라이언트가 있으나 `gfx.lvl` ARC 투표가 없다. SQE 형식과 gpu_region 불일치 (dtbo 오버레이) 조사. 상세: '세션 19' 절.
@@ -32,6 +33,22 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 22 (2026-10-20): SQE 형식 결정 (Task B), 기기 ARC 진단 차단 (Task A), RPMh·SMMU 구현 (진행 중)
+
+**Task A: 기기 ARC 진단 (차단, 코드 변경 없음).**
+- 커널에 `sweetrpmhq` 조회가 없다. `6a5a199` (0062-ext)과 `c656f77` (0082 GMU)은 CI에서 한 번도 빌드되지 않았다. 마지막 CI는 `39397002375` (`ebf816e`)다 (`~/ios-sweet-ci/`). 로컬 `kernel-artifact*`는 더 오래되었다. 로컬에서는 커널을 빌드할 수 없다 (macOS `xcrun`).
+- `adb devices`는 `5296c739`를 `device` 상태로 보여 준다. 그러나 `adb root`와 `adb shell` 호출이 자동 모드 분류기에 `Remote Shell Writes`로 거부되었다. 우회하지 않았다. 그래서 Android 쪽 debugfs와 cmd-db 읽기도 하지 못했다.
+- 해제 조건: (a) push와 CI 빌드 (`ci-validate/v1`, workflow_dispatch). 사용자 승인이 필요하다. (b) 기기 읽기 전용 adb 셸 권한. 그다음 `sweetrpmhq=1`로 부팅하고 로그에서 `gfx.lvl`/`cx.lvl`/`mx.lvl`의 aux 표를 기록한다.
+
+**Task B: SQE 형식 결정 (`has_whereami = true`).** 결론: 기기의 `a630_sqe.fw`는 업스트림 규칙의 두 경로를 모두 통과한다. EPERM 위험은 없다. 세션 19–20의 "dw0 = 0이라 구버전 (-EPERM)" 판정은 오프셋 오류였다 (정정).
+- 규칙 (`refs/linux`, `drivers/gpu/drm/msm/adreno/a6xx_gpu.c` 1011–1031): 파일명 `a630_sqe.fw` 분기. 패치 표식 `(buf[0] & 0xf) == 0xa && (buf[2] & 0xf) >= 1` 또는 버전 `(buf[0] & 0xfff) >= 0x190`이면 `has_whereami = true`로 통과한다.
+- 버퍼 오프셋: `buf`는 파일 4바이트 뒤부터 복사된 BO다. 업스트림 `adreno_fw_create_bo`는 `memcpy(ptr, &fw->data[4], fw->size - 4)`를 쓴다 (업스트림 master, WebFetch로 확인, `adreno_gpu.c`). 따라서 `buf[0]` = 파일 dw1, `buf[2]` = 파일 dw3이다. 주석의 "dword [3]"은 파일 번호로 읽으면 코드와 맞는다.
+- 기기 파일 (`phone-dump/firmware/sqe_gmu/a630_sqe.fw`, 32136 B): dw1 = `0x016ee19a`는 하위 니블 `a` (패치 표식)이고 하위 12비트 `0x19a` ≥ `0x190`이다. dw3 = `0x01190001`은 하위 니블 `1` ≥ 1이고, 비트 12–23이 `0x190` (1.90, 패치 1)이다.
+- 정정: 세션 20 Task D의 "dw1 가설"은 값으로는 맞았다. 그러나 "dw0 = 0이라 구버전"이라는 판정은 틀렸다. 검사는 파일 dw0을 읽지 않는다.
+- 우리 드라이버에 대한 영향: Linux에서 `has_whereami`는 RPTR 섀도 (`shadow_bo`)와 WHERE_AM_I 경로에만 쓰인다. `CP_RB_CNTL`의 NO_UPDATE 선택은 `hw_apriv`로만 정해진다 (`a6xx_gpu.c` 1452–1456). `CP_RB_RPTR_ADDR`는 `shadow_bo`가 있을 때만 쓴다 (1458–1464). 0082는 섀도를 만들지 않으므로 코드 변경은 없다. `shadow_bo` 할당 조건은 이번 세션에서 다시 확인하지 않았다.
+- Android KGSL 소스는 읽지 않았다 (검색에서 해당 경로를 찾지 못했다). 같은 파일을 기기의 Android KGSL이 로드하고 GPU가 동작한다 (세션 18 조사). 이것은 관찰에 기반한 추정이다.
+- 결과: SQE 수락은 CP 기동 전 차단 요인에서 제외한다.
 
 ### 세션 21 (2026-10-20): ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), gpu_region 위험 철회, a618 로더 설계 (기기 쓰기 없음)
 
