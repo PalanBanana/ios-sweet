@@ -14,5 +14,6 @@ __pycache__/
 /build-log/
 /buildtree-artifact/
 /kernel-artifact/
+/kernel-artifact-new/
 /run.log
 /*.build-tail.txt

@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 17 (2026-10-20): GX GDSC 점검과 CP_PROTECT 33 구현 (커밋 `e6bb304`).** 승인 1·3 구현, 승인 2 (HWCG) 철회. 체인 84/84, `check_s17.py` PASS. 구현 전 QEMU 기준선 부팅 정상 (패닉 없음, 옛 커널과 같은 데이터 어보트 1회). 컴파일과 기기 판독은 미확인. 상세: '세션 17' 절.
 - **세션 16 (분석, 2026-10-20): shim SCM 경로, Linux hw_init 매핑, personality 준비 (코드 변경 없음).** shim에는 SMC(PSCI)만 있고 SCM/PAS 호출은 없다 (경우 2). hw_init 쓰기 약 140개 중 0082가 구현한 것은 19개다. personality는 게이트가 닫혀 있으면 레지스터에 접근하지 않는다. CI `run-39359712049`는 `dec211a`(580e857 포함)에서 PASS, SweetGPU 경고 0. 상세: '세션 16 (분석)' 절.
 - **세션 16 (2026-10-20): 승인 2+3과 readFuse 정리 (커밋 `580e857`).** TSB 3개 레지스터와 ADDR_MODE 12개 쓰기를 추가했다 (현재 빌드에서 실행 경로 없음). `readFuse`의 `-Wcast-align`은 warning-only로 정리했다. 체인 84/84, 체크 18/18. 승인 1 (펌웨어 조사)은 폰이 USB에 없어 실행하지 못했다. 승인 4 (NO_UPDATE)는 보류. 상세: '세션 16' 절.
 - **세션 15 (2026-10-20): CI PASS 확정 (run `39350775805`).** 빌드 커밋 `ad20b73` (0082 재작성 `f6bdb2b`·`a42cd8b` 포함)이 컴파일과 링크를 통과했다. 아티팩트 3종. 코드 변경 없음. 승인 대기: 펌웨어 조사, TSB 3개, ADDR_MODE 12개. 상세: '세션 15' 절.
@@ -27,6 +28,50 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 17 (2026-10-20): GX GDSC 점검과 CP_PROTECT 33 구현 (승인 1·3), HWCG 철회 (커밋 `e6bb304`)
+
+**전제.** HEAD `2a53f73`. CI 빌드 커밋 `dec211a`와 코드가 같다 (`git diff dec211a HEAD -- xnu/ tools/` 빈 결과). 작업 트리 clean, personality 0, ADT GPU 0, origin push `DISABLED`. `qemu-system-aarch64`는 `pacman -Q`로 확인해 미설치다. 참조: `~/refs/linux` `c03c1a1`, `~/refs/mesa` `f28352d`, `~/refs/xnu-sweet` `1b191cb`.
+
+**Task A (QEMU 스모크): 부팅 정상 (구현 전 기준선, dec211a 커널).**
+- qemu 11.1.2 (`/usr/bin/qemu-system-aarch64`). 새 커널 `kernel-artifact-new/kernel.development.sweet` (17,219,216 B): `continuing on the SECVID path` 1건, 옛 `zap loader not implemented` 0건 → 현재 코드 세대.
+- ADT `mkadt.py --qemu` 4164 B. payload `mkpayload.py` 16,618,192 B (cmdline `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`). `qemu-sweet.py --secs 60 --fail-on-panic`: exit 0, `no_panic_observed`.
+- 화면 (`fb.txt`): Skywalk 자체 테스트 통과, IOKit 등록 (SURF, HID, BATTERY, platform expert), CPU 0 기동 (SGI1), AMFI·Sandbox 정책, HFS, mbinit, DLIL self-test, `dlil_init … Proceeding.`까지 진행 (60 s 시점).
+- `qemu.log`: IRQ 예외 3360건 (`_machine_idle +0xfc`로 복귀, 타이머 틱). 데이터 어보트 1회: ELR `0xfffffe0007652560` = `_skmem_sysctl_init +0x18`, ESR `0x96000046` (EL1 쓰기, 변환 오류 레벨 2), FAR `0xfffffe46cd4d4000`. 같은 명령으로 복귀한 뒤 재발 없음.
+- 기준선: 옛 커널 (`kernel-artifact`, 세션 9)을 같은 ADT와 cmdline으로 돌리니 화면 진행이 같고, 데이터 어보트도 1회 (같은 ESR, FAR `0xfffffe30060a4000`). 이 어보트는 이번 변경과 무관한 기존 현상이며 회귀가 아니다.
+
+**Task B (GDSC 대상): 확정 + 정정 2건.**
+- 정정 1: 브리프의 phandle `0x1c5`는 CX다 (`gpu_cx_gdsc`, reg `0x509106c`, DT 6159–6170). GX는 `0x24e` (`gpu_gx_gdsc`, reg `0x509100c`, DT 6172–6186). GPU의 `vdd-supply`가 GX (DT 17778), `vddcx-supply`가 CX (DT 17777).
+- 정정 2: "refs/linux에 gdsc.c가 없다"는 틀렸다. `c03c1a1`에 `drivers/clk/qcom/gdsc.c`가 있다. 작업 트리에는 없어서 `git show`로 읽었다.
+- gpucc 안의 오프셋: GX GDSCR `0x100c` (`gpucc-sm8150.c:233`, `gpucc-sc7180.c:170`, `gpucc-sdm845.c:131`), CX `0x106c` (`gpucc-sm8150.c:223`).
+- 상태 판독: DT GX 노드에 `qcom,poll-cfg-gdscr`가 있다. `gdsc.c:61–95`에 따르면 이 경우 상태는 **CFG_GDSCR `0x5091010`의 bit 16 (`GDSC_POWER_UP_COMPLETE`, `gdsc.c:32`)**이다. 비폴링 경로는 GDSCR bit 31 (`PWR_ON_MASK`, `gdsc.c:21`)이다. DT GX 플래그 (`qcom,reset-aon-logic` + poll)는 `gpucc-sm8150.c:240`의 `gpu_gx_gdsc` (CLAMP_IO | AON_RESET | POLL_CFG_GDSCR)와 같다. sc7180 GX는 CLAMP_IO만 있다.
+- 0072 USB GDSC의 bit 31 관측은 NOTES 408 (GCC, 비폴링 경로)에 있다.
+- Linux의 GX-on 판정은 GMU `SPTPRAC_PWR_CLK_STATUS` (`a6xx_gmu.c:95–119`)다. GMU가 매핑되어 있지 않아 지금은 쓸 수 없다.
+- 매핑 API (헤더 확인, 컴파일 미검증): `IOMemoryDescriptor::withPhysicalAddress` (`IOMemoryDescriptor.h:519`), `createMappingInTask` (`:757`), `kIOMapAnywhere` (`IOMapTypes.h:52`), `kIOMapInhibitCache` (`:57`), `kIODirectionInOut` (`IOMemoryDescriptor.h:65`).
+- 미확정: gpucc의 전원 도메인 (DT에서 gpucc 노드 632행 근처와 GPU/GMU 노드 17740–18300행에 `power-domains`가 없다), 부팅 시 GX 상태 (폰 미연결), CFG_GDSCR bit 16의 기기 판독.
+
+**정정 3 (승인 2의 전제): Linux 매칭 경로.** `adreno_info(chip_id)` (`adreno_device.c:49–62`)는 `info->machine`이 루트 compatible에 없으면 항목을 건너뛴다 (`:56`). sweet DT의 루트 compatible은 `qcom,sdmmagpie`다 (DT 7행, `qcom,sm7150` 문자열 없음). 그래서 `qcom,sm7150` 항목 (`a6xx_catalog.c:762–777`, hwcg `a615_hwcg` 776행, zapfw `a615_zap.mbn` 774행)은 선택되지 않는다. 선택되는 것은 다음 0x06010800 항목 (`:789–805`, revn 618)이고, 이 항목에는 `.hwcg`도 `.zapfw`도 없다. `a6xx_set_hwcg`는 `a6xx_gpu.c:651`에서 바로 반환한다. 세션 16까지의 "sm7150 항목 → HWCG 63 쓰기" 전제와 zap 분석의 `a615_zap` 전제는 이 기기에서 틀렸다. 다시 봐야 한다.
+
+**승인 결과 (사용자).** 승인 1 승인 → 구현. 승인 2 (HWCG) 철회 → 구현 안 함 (정정 3의 근거가 맞다). 승인 3 승인 (승인 1 통과 후에만 실행) → 구현.
+
+**구현 (커밋 `e6bb304`, 0082 재생성, `gen0082.py`).**
+- `checkGxPowered()`: `powerUpSequence()`의 첫 문장. CFG_GDSCR `0x5091010` bit 16을 판정하고 GDSCR `0x509100c` bit 31을 대조한다. 읽기만 한다. 꺼져 있으면 `kIOReturnOffline`, 두 값이 다르면 `kIOReturnError`를 반환하고 쓰기는 0이다. `start()`는 `initRingbuffer()` 전에 멈춘다. 이때 `teardown()`은 `fReady`가 거짓이라 `RBBM_INT_0_MASK`를 쓰지 않는다.
+- gpucc 창 (`0x5090000`, `0x1014`): 게이트가 열린 경로에서 `IOMemoryDescriptor::withPhysicalAddress` + `createMappingInTask(kernel_task, …, kIOMapAnywhere | kIOMapInhibitCache)`로 매핑한다. ADT는 바꾸지 않는다. `teardown()`에서 해제한다.
+- CP_PROTECT 33 쓰기: `CP_PROTECT_CNTL` `0x84F` = `0xB`, `CP_PROTECT[0..31]` = `0x850`–`0x86F`. 값은 `a630_protect_regs` (카탈로그 509–540행)를 매크로 인코딩으로 생성했다 (마지막 `0x80011C00`). 위치는 ADDR_MODE 뒤, `RBBM_INT_0_MASK` 앞이다.
+- HWCG: 쓰지 않는다.
+
+**검증 (이 머신).**
+- `check_s17.py` PASS (Mesa 오프셋, 카탈로그 재계산, DT와 `gdsc.c` 상수, 첫 GX 접근, 쓰기 위치, HWCG 없음, 해제 경로).
+- 체인 84/84 (`run-chain.sh`), 워크트리 소스와 stage 소스 바이트 일치.
+- `check_s16.py`: TSB/ADDR 등 기존 검사 모두 OK. `/ 4` 규칙만 FAIL (`readGpucc`의 두 번째 변환 때문, `check_s17.py`가 대체).
+- `tools/test-check-patch-log.sh` 18/18.
+- 미실행: 컴파일 (이 머신에 xcrun·SDK 없음, CI가 컴파일), 구현 후 커널 스모크 (새 커널 없음), 기기 판독.
+
+**정정 (세션 16 문서).** `hw_init 19/140 (13%)`의 분모는 HWCG 64를 포함한다. 이 DT의 Linux 경로에는 HWCG가 없으므로 분모를 다시 세야 한다. 그때까지 % 값은 쓰지 않는다. CP_PROTECT 쓰기는 33이다 (승인 문장의 32는 CNTL을 뺀 값이었다).
+
+**다음.** (1) `CI-PRECHECK.md` 세션 17 절의 push와 `gh workflow run`을 사용자가 실행한다 (push는 `fork`에만). CI가 처음으로 CP_PROTECT와 GDSC 점검을 컴파일한다. (2) 아티팩트 `xnu-kernel`을 받으면 `kernel-artifact-new/`를 갱신하고 QEMU 스모크를 다시 돌린다. (3) 다음 결정 후보: GX를 켜는 경로 (GDSCR SW_COLLAPSE 해제 + `core_root_clk`, 쓰기라서 별도 승인), zap 경로 재분석 (선택된 항목에 zapfw 없음), hw_init 분모 재산정, gpucc 전원 도메인 확인.
+
+**커밋.** `e6bb304` (0082 코드). 이 문서 커밋 (NOTES.md, CI-PRECHECK.md 세션 17 절, `.gitignore`에 `/kernel-artifact-new/` 추가). 세션 커밋 2개 (상한 3). 커밋 trailer는 세션 지정값 `dipa-studio`.
 
 ### 세션 16 (분석, 2026-10-20): shim SCM 경로, Linux hw_init 매핑, personality 준비 (코드 변경 없음)
 
