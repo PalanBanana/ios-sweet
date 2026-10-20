@@ -181,3 +181,26 @@ fast-forward다 (`fd539b9`의 자손인 `e8e2acb`, `f6bdb2b`, `8272b95`, `a42cd8
 - [ ] 이번 부팅에 `sweetgpu=1`을 넣는 것을 사용자가 승인했다. 넣지 않은 부팅 (기본)은 레지스터에 접근하지 않는다.
 - [ ] 사용자가 승인했다 (AGENTS.md: 임시 `fastboot boot`, Android와 백업 보존, 파괴적 단계는 사용자 확인).
 - [ ] 멈추면 전원 키를 길게 눌러 강제 재시작한다. 재시작 후 `sweetgpu` 없이 부팅해 정상 복귀를 확인한다.
+
+## 세션 14: 실행 명령 (정확한 값)
+
+기준: 세션 14 (2026-10-20). fork `ci-validate/v1`은 이 시점에 `fd539b9`였다 (`git ls-remote fork refs/heads/ci-validate/v1`, 읽기 전용). 실행 전에 같은 값인지 다시 확인한다.
+
+```sh
+cd ~/projects/ios-sweet
+git status --short                                   # 비어 있어야 한다
+git rev-parse --short HEAD                           # 기록 (이번 세션 문서 커밋 포함)
+git ls-remote fork refs/heads/ci-validate/v1         # fd539b9여야 한다 (아니면 멈추고 확인)
+git push fork HEAD:ci-validate/v1                    # 기대: fd539b9..HEAD, fast-forward, 7커밋
+gh workflow run xnu.yml -R PalanBanana/ios-sweet --ref ci-validate/v1 \
+  -f macos_version=13.5 -f kernel_config=DEVELOPMENT -f machine_config=SWEET -f keep_going=true
+gh run list -R PalanBanana/ios-sweet --workflow xnu.yml --limit 3    # RUN_ID 확인
+gh run watch <RUN_ID> -R PalanBanana/ios-sweet
+mkdir -p ~/ios-sweet-ci
+gh run view <RUN_ID> -R PalanBanana/ios-sweet --log > ~/ios-sweet-ci/run-<RUN_ID>.txt
+./tools/post-ci-analyze.sh ~/ios-sweet-ci/run-<RUN_ID>.txt
+```
+
+- `git push`에 remote를 생략하면 origin으로 간다. origin은 `DISABLED`다. `fork`를 명시한다.
+- 로컬 `ci-validate/v1` (`fd539b9`)은 push 대상이 아니다.
+- 판정: `POST_CI_VERDICT: PASS` (exit 0)이면 PASS. 그 외는 `CI-FAILURE-PLAYBOOK.md`를 따른다.

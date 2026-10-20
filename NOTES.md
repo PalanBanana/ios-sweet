@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 14 (2026-10-20): CI 미실행 (Case N).** fork `ci-validate/v1`은 여전히 `fd539b9`이고 새 run 로그가 없다. 코드 변경 없음. NO_UPDATE의 의미를 정정했다 (하드웨어 RPTR 섀도를 끄는 비트다). TSB/ADDR_MODE 적용 초안은 승인 전까지 적용하지 않는다. 상세: 아래 '세션 14' 절.
 - **세션 13 (2026-10-20): CI 준비와 연구.** 코드 변경 없음. push는 `git push fork HEAD:ci-validate/v1`이다 (로컬 `ci-validate/v1`은 `fd539b9`라서 `git push fork ci-validate/v1`은 아무것도 보내지 않는다). CI는 수동 `workflow_dispatch`다. NO_UPDATE 불일치 (0082 `0x20C`, Linux `0x0800020C`)와 TSB/ADDR_MODE 표는 세션 14 입력이다. 상세: 아래 '세션 13' 절.
 - **세션 12 (2026-10-19): 0082 GPU 재작성 (`f6bdb2b`).** DT 값으로 다시 썼다. 확정 값, 브리프 정정, 미확정 목록은 아래 '세션 12' 절.
 - **GPU 게이트 (세션 12에서 정정; 세션 6 문구는 틀렸다):** `sweetgpu=1`로 게이트가 열리면 이제 레지스터를 쓴다 (RBBM 리셋, INT 마스크, SECVID, CP_RB_BASE/CNTL/WPTR). zap 로더는 없고 `kIOReturnUnsupported`를 돌려주며, 이를 Linux의 `-ENODEV` 경로로 처리해 계속한다. 첫 쓰기는 전원·클록이 꺼진 GPU에서 버스 폴트를 일으킬 수 있다. 게이트 바깥에서는 레지스터를 건드리지 않는다. 운영 규칙은 그대로 `sweetgpu=1`만 쓰는 것이다. `-sweetgpu`와 `sweetgpu=0x1`도 게이트를 연다.
@@ -23,6 +24,78 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 14 (2026-10-20): CI 미실행 (Case N), 결정 문서 (코드 변경 없음)
+
+**판정: Case N.** fork의 `ci-validate/v1`은 여전히 `fd539b9`다 (`git ls-remote`, 읽기 전용). 새 run 로그가 없다 (`~/ios-sweet-ci/` 없음, `run-*.txt` 없음). 저장소 루트의 `run.log`는 세션 9의 첫 run 로그다 (SUMMARY 1개, PASS). 새 run이 아니므로 판정에 쓰지 않는다.
+
+**전제 조건 (스캔).** HEAD `f782f4a`, 작업 트리 clean, origin push `DISABLED`, 체인 84/84 (깨끗한 워크트리, 스테이지 3개), `test-check-patch-log` 18/18. personality 없음 (`MsmGpuAdreno618`은 0082 패치와 문서에만 있다. `IOKitPersonalities`와 `allocClassWithName`은 없다). `mkadt.py`에 GPU 노드 없음.
+
+**Task N-1: 실행 명령.** `CI-PRECHECK.md` 세션 14 절에 정확한 값을 넣었다. push는 `git push fork HEAD:ci-validate/v1`이다. 트리거는 `gh workflow run xnu.yml -R PalanBanana/ios-sweet --ref ci-validate/v1 -f macos_version=13.5 -f kernel_config=DEVELOPMENT -f machine_config=SWEET -f keep_going=true`다. 예상 push 범위는 `fd539b9..HEAD`이고 이번 세션 커밋을 포함해 7커밋이다.
+
+**Task N-2: NO_UPDATE 결정 문서 (승인 대기, 코드 없음).**
+- 사실 1. Linux는 `hw_apriv == 0`이면 `CP_RB_CNTL = MSM_GPU_RB_CNTL_DEFAULT | AXXX_CP_RB_CNTL_NO_UPDATE`를 쓴다 (`a6xx_gpu.c:1452-1456`). 이 칩의 `hw_apriv`는 0이다 (`a6xx_gpu.c:2717`, 카탈로그에 `ADRENO_QUIRK_HAS_HW_APRIV` 없음). 값은 `0x0800020C`다 (NO_UPDATE = bit 27, `adreno_common.xml:143`).
+- 사실 2 (의미, 정정). Linux 주석은 "extended APRIV를 지원하는 타깃은 하드웨어 RPTR 섀도를 쓸 수 있지만, 나머지는 그 기능을 **끈다**"라고 쓴다 (`a6xx_gpu.c:1448-1450`). NO_UPDATE는 하드웨어 RPTR 섀도 갱신을 끄는 비트다. 요청문의 "NO_UPDATE가 없으면 CP가 매번 반영하고, Linux는 세워서 지연시킨다"는 방향이 반대다.
+- 사실 3 (rptr 읽기). `a6xx_get_rptr` (`a6xx_gpu.c:2392-2407`)은 `hw_apriv || has_whereami`일 때만 섀도 값을 쓴다. 아니면 `REG_A6XX_CP_RB_RPTR`을 직접 읽는다. 섀도 버퍼도 같은 조건에서만 할당된다 (`a6xx_gpu.c:1100-1106`). `CP_RB_RPTR_ADDR`은 `shadow_bo`가 있을 때만 쓴다 (`a6xx_gpu.c:1458-1462`).
+- 사실 4 (has_whereami). SQE 펌웨어의 버전 검사로 정해진다 (`a6xx_gpu.c:1014-1026`). 이 칩의 SQE는 `a630_sqe.fw`다 (`a6xx_catalog.c:763-774`). 이 머신의 `phone-dump/firmware`에는 `a615_zap`만 있다 (세션 12 확인). 그래서 판정할 수 없다.
+- 현재 0082: `0x20C`, `CP_RB_RPTR_ADDR` 미설정, rptr 읽기 없음, SQE 로드 없음. CP가 시작되지 않으므로 관측 가능한 차이는 없다고 추정한다 (미검증).
+- 권장 (보류). "한 줄 변경(`0x0800020C`)"만으로는 불완전하다. NO_UPDATE를 켜면 rptr 읽기 경로가 필요하다 (`kCpRbRptr`, 0x806, 또는 섀도). `has_whereami`는 SQE 펌웨어로 판정해야 한다. 둘 다 CP 시작 설계와 함께 결정하는 것이 맞다.
+- 승인 요청. (a) 지금 `0x0800020C`와 rptr 읽기 경로를 넣을지, (b) CP 시작 설계 때 함께 결정할지. 기본 권장은 (b)다.
+
+**Task N-3: TSB/ADDR_MODE 적용 초안 (적용 금지).**
+- 위치: `iokit/Kernel/arm/SweetGPU.cpp`의 `MsmGpuAdreno618::powerUpSequence()`, RBBM 리셋 직후, `RBBM_INT_0_MASK` 쓰기 이전. Linux 순서와 맞춘다 (TSB/ADDR_MODE 1210–1236 → INT_0_MASK 1436 → SECVID 1516).
+- 규약 정정. Mesa 오프셋은 이미 dword 인덱스이므로 `/4`를 하지 않는다. 요청문의 `write_reg(0x0842/4, 0x1)`는 틀렸다. reg64는 lo(index)와 hi(index+1)를 두 번 쓴다 (0082 `initRingbuffer`와 같은 방식). `write_reg64` 헬퍼는 0082에 없다. 파일은 `SweetGPU.cpp`다 (요청문의 `MsmGpuAdreno618.cpp`는 없다).
+- 초안 (적용 금지, 승인 후 세션 15에서 적용):
+
+```cpp
+/* 초안. 적용 금지. Mesa a6xx.xml 오프셋 (dword 인덱스), Linux a6xx_gpu.c 1210-1236 */
+enum {
+	kRbbmSecvidTsbCntl          = 0xF803,  /* a6xx.xml:778, Linux 1210 */
+	kRbbmSecvidTsbTrustedBase   = 0xF800,  /* a6xx.xml:776 (reg64), Linux 1220 */
+	kRbbmSecvidTsbTrustedSize   = 0xF802,  /* a6xx.xml:777, Linux 1221 */
+	kCpAddrModeCntl             = 0x0842,  /* a6xx.xml:270, Linux 1225 */
+	kVscAddrModeCntl            = 0x0C01,  /* a6xx.xml:550, Linux 1226 */
+	kGrasAddrModeCntl           = 0x8601,  /* a6xx.xml:2219, Linux 1227 */
+	kRbAddrModeCntl             = 0x8E05,  /* a6xx.xml:2840, Linux 1228 */
+	kPcAddrModeCntl             = 0x9E01,  /* a6xx.xml:3464, Linux 1229 */
+	kHlsqAddrModeCntl           = 0xBE05,  /* a6xx.xml:5009, Linux 1230 */
+	kVfdAddrModeCntl            = 0xA601,  /* a6xx.xml:3613, Linux 1231 */
+	kVpcAddrModeCntl            = 0x9601,  /* a6xx.xml:3257, Linux 1232 */
+	kUcheAddrModeCntl           = 0x0E00,  /* a6xx.xml:1202, Linux 1233 */
+	kSpAddrModeCntl             = 0xAE01,  /* a6xx.xml:4364, Linux 1234 */
+	kTpl1AddrModeCntl           = 0xB601,  /* a6xx.xml:4587, Linux 1235 */
+	kRbbmSecvidTsbAddrModeCntl  = 0xF810,  /* a6xx.xml:779, Linux 1236 */
+};
+static const uint32_t kAddrMode64 = 1;     /* a5xx_address_mode ADDR_64B, adreno_common.xml:390 */
+
+/* powerUpSequence(): RBBM 리셋 직후 */
+writeReg(kRbbmSecvidTsbCntl, 0);
+writeReg(kRbbmSecvidTsbTrustedBase, 0);        /* lo */
+writeReg(kRbbmSecvidTsbTrustedBase + 1, 0);    /* hi */
+writeReg(kRbbmSecvidTsbTrustedSize, 0);
+/* Linux 1223: if (!adreno_is_a7xx). a618 is a6xx, so the 12 writes below run. */
+writeReg(kCpAddrModeCntl, kAddrMode64);
+writeReg(kVscAddrModeCntl, kAddrMode64);
+writeReg(kGrasAddrModeCntl, kAddrMode64);
+writeReg(kRbAddrModeCntl, kAddrMode64);
+writeReg(kPcAddrModeCntl, kAddrMode64);
+writeReg(kHlsqAddrModeCntl, kAddrMode64);
+writeReg(kVfdAddrModeCntl, kAddrMode64);
+writeReg(kVpcAddrModeCntl, kAddrMode64);
+writeReg(kUcheAddrModeCntl, kAddrMode64);
+writeReg(kSpAddrModeCntl, kAddrMode64);
+writeReg(kTpl1AddrModeCntl, kAddrMode64);
+writeReg(kRbbmSecvidTsbAddrModeCntl, kAddrMode64);
+```
+
+- 효과 (추정, 미검증). TSB를 0으로 쓰는 것은 보안 범위를 끄는 쓰기이고, 기본값과 같을 수 있다. `ADDR_64B` 설정은 CP가 돌기 전에는 관측되지 않을 것으로 본다. 쓰기 15개는 현재의 쓰기와 같은 위험 등급이다. 세션 12 안전 메모대로, 전원과 클록이 꺼진 GPU에 첫 쓰기가 버스 폴트를 일으킬 수 있다.
+
+**Task N-4: 커밋.** 이번 세션은 문서만 커밋한다. 코드는 바꾸지 않았다.
+
+**세션 15 준비.**
+- CI 실행 후 로그를 `~/ios-sweet-ci/run-<RUN_ID>.txt`로 두면, 그 로그로 케이스 P 또는 F를 판정한다.
+- 승인 항목 두 가지: (1) NO_UPDATE 채택과 rptr 읽기 경로, (2) TSB/ADDR_MODE 15개 적용 (위 초안 그대로인지 확인).
+- 미확정 자료: `a630_sqe.fw` (has_whereami 판정), downstream zap 조회 방식 (세션 13 Task D).
 
 ### 세션 13 (2026-10-20): CI 준비와 오프라인 연구 (코드 변경 없음)
 
