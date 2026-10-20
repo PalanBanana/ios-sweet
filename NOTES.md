@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 21 (2026-10-20): RPMh ARC 조회 `6a5a199` (`sweetrpmhq=1`, 읽기 전용), GMU 창 매핑 `c656f77` (읽기·쓰기 없음), gpu_region 위험 철회, `a618_gmu.bin` 로더 설계 (코드 없음). 체인 84/84, 로컬 검사 PASS. 기기 쓰기·부팅 없음. 다음 결정: 로더 운반 경로 (R1 RAM 페이로드 또는 R2 no-map 영역)와 XNU 예약 경로 확인. 승인 요청 (세션 22): ARC 부팅 진단 (권장 승인), SQE 조사용 인터넷 (승인 필요), 부팅 DT 진단 (권장 보류). 상세: '세션 21' 절.**
 - **세션 20 (2026-10-20): CI `39397002375` PASS 확인 (빌드 `ebf816e`). GMU 5단계 설계와 블로커 순서, RPMh ARC 확장 설계 (`gfx.lvl`·`cx.lvl`·`mx.lvl`). CX ON은 `cx.lvl` 투표가 먼저 필요하다. SQE 형식 미확정 (CP 기동 전 해결). 기기 gpu_region은 0x97f15000 (라이브 DT). 코드 변경 없음. 세션 21 승인 요청 3건. 상세: '세션 20' 절.**
 - **세션 19 (2026-10-20): NO_UPDATE 구현 (커밋 `a4b0469`, 승인 2).** `CP_RB_CNTL = 0x0800020C`. RPTR 섀도는 설정하지 않는다 (shadow 없음). A618 GMU는 `a618_gmu.bin`일 가능성이 높다 (추정). GX 켜기 설계는 Linux 기준 GMU 경로 (호스트 직접 GDSCR 해제는 Linux 선례 없음). XNU에는 RPMh 클라이언트가 있으나 `gfx.lvl` ARC 투표가 없다. SQE 형식과 gpu_region 불일치 (dtbo 오버레이) 조사. 상세: '세션 19' 절.
 - **세션 18 (2026-10-20): 폰 read-only 조사, zap 재분석, 승인 요청 3건 (코드·커밋 변경 없음, 문서 미커밋).** SQE·GMU·zap 실물 확인 (`/vendor/firmware`). Android idle에서 GX·CX·VDD_GFX 모두 off. zap은 Android 커널 PIL(`a615_zap` ONLINE)이 올리고, XNU에는 SCM 경로가 없어 no-zap이 Linux 동등이다. 정정: NO_UPDATE는 SQE와 무관하게 필요하다 (CP 기동 전). 상세: '세션 18' 절.
@@ -31,6 +32,60 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 21 (2026-10-20): ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), gpu_region 위험 철회, a618 로더 설계 (기기 쓰기 없음)
+
+**전제.** 시작 HEAD `44c7503`. 세션 커밋 한도 3개: `6a5a199` (0062-ext), `c656f77` (0082 GMU 매핑), 이 문서 커밋. 폰에 쓰지 않았고 부팅하지 않았다. `sweetgpu=1`, `/dev/mem`, 레지스터 쓰기, push, gh 없음. 패치 체인 워크트리는 `~/refs/xnu-sweet`.
+
+**Task A: gpu_region 판정 (코드 변경 없음). 결론: 세션 20의 "XNU가 gpu_region을 쓸 수 있다"는 위험을 철회한다 (A-3 분기).**
+- 도구 소스 (`tools/`, `shim/`, `xnu/`; 덤프 제외)에 `gpu_region` 문자열이 없다 (grep 0건). 참조는 NOTES와 덤프뿐이다.
+- XNU가 관리하는 RAM: `tools/mkadt.py` 13–14행 `PHYS_BASE = 0xb0000000`, `MEM_SIZE = 0x4d000000`, 81–82행에서 dram-base/dram-size로 광고. `tools/mkpayload.py` 18행이 `phys_base`를 같은 값의 XNU 관리 RAM으로 정의한다.
+- gpu_region은 덤프 `0x97715000` (`sweet.dts:18541`)과 라이브 `0x97f15000` (`dtbo-1.dts` `fragment@67`, 5653–5657행), 크기 `0x2000`. 둘 다 `0xb0000000` 아래다 (확인됨).
+- DT 검사 (1셀 쌍과 reserved-memory 2셀 기준): `[0xb0000000, 0xfd000000)`에 물리 `reg` 항목이 0개다 (확인됨). 유일한 항목은 `qcom,icnss@18800000` (`sweet.dts:5479`)의 `smmu_iova_ipa` `0xb0000000`/`0x10000`인데, 이것은 SMMU IOVA 창이라 물리 충돌이 아니다.
+- 정정: 세션 20 Task E의 "ADT gpu_region 노드" 요청은 현재 코드에 필요 없다. Task D의 R1을 고르면 다른 이유로 필요해진다 (아래).
+- ADT `memory-map`은 `mkadt.py` 114행의 빈 자리표시자다. 이름 있는 항목은 `mkpayload.py`가 RAMDisk를 넣을 때만 생긴다.
+
+**Task B: RPMh ARC 읽기 전용 조회 (`6a5a199`).** 세션 21 지시에 따라 부팅 인수 게이트 뒤에 구현했다.
+- `bsd/dev/sweet_rpmh.c` (0062 패치): `sweetrpmhq=1` (정확히 값 1)일 때만 `sweet_rpmh_arc_query()`가 실행된다. 투표 뒤, RPMh 락을 푼 뒤에 돈다. cmd-db를 순회해 슬레이브 3 (`CMD_DB_HW_ARC`) 항목을 찾고, `gfx.lvl`, `cx.lvl`, `mx.lvl`의 주소·슬레이브·우선순위·aux 표를 출력한다. 일치 항목이 1개가 아니면 `ENODEV`.
+- 새 블록에 `rh_write`, `rh_sync`, 원자 연산이 없다 (grep 확인). 클라이언트가 poisoned이거나 cmd-db가 없으면 건너뛴다.
+- 검증: 체인 84/84, 스텁 구문 검사에서 원본과 새 버전 모두 경고 0, 오류 0. 기기 실행은 없다 (승인 필요).
+
+**Task C: GMU 창 물리 매핑 (`c656f77`, 읽기·쓰기 없음).**
+- `SweetGPU.cpp`: `kGmuPA = 0x506a000`, `kGmuBytes = 0x31000`, `sweet.dts:18230` `gmu` 노드의 첫 항목 (`kgsl_gmu_reg`). PDC 두 구역 (`0xb290000`, `0xb490000`)은 매핑하지 않는다. `static_assert`로 그 아래임을 확인한다.
+- `start()`: 게이트가 열린 경로에서만, gpucc 매핑 뒤이고 `powerUpSequence()` 앞에서 `mapPhysical`로 매핑한다. `fGmu`는 `init()`에서 비우고 `teardown()`에서 `fGpucc`보다 먼저 해제한다.
+- 0082 diff 확인: 추가된 줄은 상수, 선언, 매핑, 해제다. `fGmu`는 4곳 (선언, init, 매핑, 해제)에만 있고 역참조가 없으며 `readReg`/`writeReg`가 없다. 헤더 주석 2줄만 바뀌었다.
+- 검사: 체인 84/84, `check_s17` PASS, `check_s19` PASS, `check_s21_gmu` PASS. 스텁 구문 검사에서 HEAD와 새 버전 모두 경고 0, 오류 0.
+- **16K 페이지 주의.** 이 포트는 16K granule이다 (Milestone 3). `0x506a000`은 4K 정렬이지만 16K 정렬이 아니다. 첫 게이트 열림 부팅에서 `mapPhysical`이 찍는 `va=`가 PA의 페이지 안 오프셋을 반영하는지 확인해야 한다. GMU에 접근하기 전에 필수다.
+
+**Task D: `a618_gmu.bin` 로더 설계 (문서만, 구현 없음, B0 이후).**
+1. 이미지 식별 (로컬, git 밖): `phone-dump/firmware/sqe_gmu/a618_gmu.bin` (`.gitignore` 13행 `/phone-dump/`). 크기 32768 B = `0x8000` (ITCM 상한과 같다). sha256 `9ef10b2b179054fb57af25008e29feb24300c2eaaeabf907bd741786bbacbf2e` (해시만 기록하고 내용은 기록하지 않는다). 처음 두 dword `0x00043f80`, `0x00000009`는 Cortex-M 벡터 표 모양이다 (초기 SP, 리셋 벡터 0x8 + Thumb 비트). 그래서 세션 20의 legacy 경로 (이미지 전체를 ITCM 시작에 쓴다)와 맞는다. (추정: GMU 메모리 맵으로는 확인하지 않았다.)
+2. 쓰기 범위: ITCM 시작 = 절대 `0x506d000` (dword `0x1b400` = `0x5000000 + 0x1b400×4`), `kGmuPA`에서 오프셋 `0x3000`. 끝 `0x5075000`은 매핑 끝 `0x509b000` 안이다. 32비트 쓰기 8192개.
+3. 운반 경로 (미결정):
+   - **R1: RAM 안 페이로드.** `mkpayload.py`에 `--gmu-fw`를 추가해 이미지를 세그먼트로 붙이고, `add_ramdisk_to_adt` (125–131행)와 같은 방식으로 `/chosen/memory-map`에 이름 있는 항목을 넣는다. 근거: 페이로드 세그먼트는 물리 주소로 복사된다 (`shim/loader.c` 103–106행). 미확인: XNU가 RAMDisk 페이지를 자유 목록에서 어떻게 뺐는지. 확인한 것은 이름 기반 처리뿐이다 (`iokit/bsddev/IOKitBSDInit.cpp:753` RAMDisk, `osfmk/arm64/arm_vm_init.c:1290` TrustCache). 새 이름은 XNU 쪽 예약 패치가 필요할 수 있다.
+   - **R2: Linux `no-map` 영역.** `0xb0000000` 아래라 XNU 관리 RAM 밖이다. 그러나 크기 ≥ `0x8000`인 이름 있는 `no-map` 영역 13개는 모두 다른 서브시스템 것이다 (예: `ips_fw_region` 0x97700000/0x10000, `npu_region` 0x97680000/0x80000, `qseecom_region` 0x9e400000/0x1400000). gpu_region (8 KiB)은 작다. 빈 영역은 확인되지 않았다.
+   - 공통: 이미지는 git과 CI에 들어가지 않는다. 이미지 조립은 로컬 명령이고 CI 워크플로우는 커널만 만든다.
+4. 로드 순서 (세션 20 5단계 표 기준): (a) 입력 검사: 길이 ≤ `0x8000`, 4의 배수, 리셋 벡터 Thumb 비트. (b) 매핑 VA 오프셋 확인 (16K). (c) GMU 클록 (B-CLK). (d) CX ON: `cx.lvl` 투표 후 `gpu_cx_gdsc` 해제 (B1). (e) GX rail: `gfx.lvl` 투표 (B1, B2). (f) RSCC·PDC 필요 여부 (미확정). (g) ITCM에 8192 dword 쓰기 (쓰기이므로 별도 승인). (h) `GENERAL_7 = 1`, `HFI_QTBL_ADDR` (IOVA, B0), `CM3_SYSRESET` 토글, `HFI_CTRL_INIT`.
+5. 실패 모드: 잘못된 이미지나 순서 오류 → GMU 정지 또는 버스 오류. ITCM은 SRAM이라 전원이 꺼지면 내용이 사라진다 (추정). 복구는 기기 재부팅 (fastboot 임시 이미지).
+6. 승인 게이트: 이 설계 승인 → 운반 경로 결정 (R1이면 `mkpayload`와 ADT 변경 승인) → XNU 예약 경로 확인 (읽기, 승인 불필요) → B0 설계 → 구현 (쓰기, 승인) → 기기 부팅 (승인).
+
+**Task E: 부팅 DT 진단 (승인 요청, 권장: 보류).**
+- 내용: `sweetbootdiag=1`일 때 shim이 DTB의 `pil_gpu_mem` reg를 출력한다 (overlay 적용 여부 확인). 필요한 것: `shim/loader.c` 코드 변경 + 기기 부팅 1회.
+- 판단: XNU가 받는 장치 정보는 페이로드의 ADT다 (`mkpayload.py` 16행 `adt_off`). shim은 DTB에서 `/chosen`의 initrd 두 값만 읽는다 (`loader.c` 83–84행). 따라서 DTB의 overlay 적용 여부는 현재 설계를 바꾸지 않는다. **권장: 승인하지 않음 (보류).**
+
+**세션 22 승인 요청 (정정 포함).**
+1. **`sweetrpmhq=1` 기기 부팅 (ARC 조회, 읽기 전용).** 투표 없음. 출력은 `gfx.lvl`/`cx.lvl`/`mx.lvl`의 aux 표이고 B1·B2의 입력이다. **권장: 승인.**
+2. **`sweetbootdiag=1` (Task E).** **권장: 보류.**
+3. **ADT memory-map 항목 (gpu_region).** **철회** (Task A). R1을 고르면 `GMUFW` 항목 승인을 따로 요청한다.
+4. **SMMU 방향 (B0), 정정.** GPU SMMU는 `arm,smmu-kgsl@5040000` (`sweet.dts:10589`, phandle `0x1cd`)이다. GPU 컨텍스트는 `iommus = <0x1cd 0x00>` (18215행), `<0x1cd 0x02>` (18222행). GMU 컨텍스트는 `<0x1cd 0x04>` (18263행), `<0x1cd 0x05>` (18269행). 스트림 `0x240`은 GPU 것이 아니다: `<0x30 0x240 0x01>`은 `icnss`다 (5481행). B0 설계 문서는 승인 없이 쓸 수 있다. 레지스터 구현은 승인 필요.
+5. **SQE 형식 (CP 기동 전 필수).** Android KGSL 소스 조사에 인터넷 접근 승인이 필요하다. 로컬 `phone-dump/firmware/sqe_gmu/a630_sqe.fw` 헤더 분석은 승인 불필요.
+6. **읽기 전용, 승인 불필요 (세션 22에서 수행):** XNU RAMDisk·TrustCache 예약 경로 추적 (R1 전제), `a6xx_gmu_rpmh_init` 호출 조건 (PDC 필요 여부), `iommus = <0x1cd 0x07>` (`sweet.dts:10750`)의 소유자.
+
+**커밋.**
+- `6a5a199` 0062-ext: ARC 읽기 전용 조회 (`sweetrpmhq=1`)
+- `c656f77` 0082: GMU 창 매핑 (읽기·쓰기 없음)
+- 이 문서 커밋 (NOTES.md 세션 21, CI-PRECHECK.md 세션 21)
+
+**sweetgpu=1 금지 유지.** personality와 ADT GPU 노드 없음. 하드웨어 부팅 없음.
 
 ### 세션 20 (2026-10-20): CI 확인, GMU 5단계 설계, RPMh ARC 확장 설계, SQE·DT 판정 (코드 변경 없음)
 

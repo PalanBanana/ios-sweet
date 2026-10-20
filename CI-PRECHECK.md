@@ -292,3 +292,15 @@ grep -c "SweetGPU.cpp.*warning" ~/ios-sweet-ci/run-<RUN_ID>.txt     # 기대: 0
 - 판정: `POST_CI_VERDICT: PASS (exit 0)`.
 - 주의: `ls -t ~/ios-sweet-ci/run-*.txt | head -1`은 `.build-tail.txt`를 고른다. 분석은 `run-<RUN_ID>.txt`를 직접 지정한다 (잘못 고르면 "verify step did not run"이 나온다).
 - 다음 push 범위: `ebf816e..HEAD` (세션 20 문서 커밋 1개). 먼저 `git ls-remote fork refs/heads/ci-validate/v1`이 `ebf816e`인지 확인한다. 문서만 push하면 CI 재실행은 필요 없다.
+
+## 세션 21: ARC 조회 (`6a5a199`), GMU 창 매핑 (`c656f77`), 문서 (CI 전 점검)
+
+- 로컬 검사 (CI 대체 아님): 체인 84/84 (`run-chain.sh`, 워크트리 `~/refs/xnu-sweet`). 스텁 구문 검사: `bsd/dev/sweet_rpmh.c` 원본과 새 버전 모두 경고 0, 오류 0 (세션 스크래치패드의 `s21-warn-*.txt`). `SweetGPU.cpp` HEAD와 새 버전 모두 경고 0, 오류 0 (`s21c-warn-*.txt`). 스텁은 세션 스크래치패드 (`s21stubs`, `s21gpustubs`)에 있고 저장소 밖이라, 공식 XNU SDK 검사가 아니다.
+- CI가 확인할 것:
+  1. `bsd/dev/sweet_rpmh.c` (C 파일): 새 `#include <pexpert/pexpert.h>`, `PE_parse_boot_argn("sweetrpmhq", ...)` (int64 버퍼, 최대 8), 정적 함수 `rh_arc_query_one`과 `sweet_rpmh_arc_query` (둘 다 호출되므로 미사용 경고가 없어야 한다), 매크로 `RH_ARC`, `RH_ARC_QUERY_MAX`. 기대: 0062 관련 경고 0.
+  2. `SweetGPU.cpp`: 새 `fGmu`, `kGmuPA`/`kGmuBytes` (`static const uint64_t`, `mapPhysical`에서 사용), `static_assert(kGmuPA + kGmuBytes <= 0xB290000, ...)`. 기대: `SweetGPU` 관련 경고 0, 컴파일 줄 존재.
+  3. 패치 수는 그대로다 (ours=84). 기대 요약: `applied=88 skipped=4 baseline_skipped=4 ours=84 ours_applied=84 expected_applied=88 stage_scripts=3/3`.
+- 로그 분석: `ls -t ~/ios-sweet-ci/run-*.txt | head -1`은 `.build-tail.txt`를 고른다. `run-<RUN_ID>.txt`를 직접 지정한다 (세션 20과 같은 함정).
+- push (사용자가 수행, 이 세션은 push하지 않음): 먼저 `git ls-remote fork refs/heads/ci-validate/v1`이 `ebf816e`인지 확인한다. 범위는 `ebf816e..HEAD`다 (세션 20 문서 `44c7503`, 세션 21 커밋 3개). 명령은 `git push fork HEAD:ci-validate/v1` (세션 13 정정).
+- 로컬 검사 결과: `check_s17` PASS, `check_s19` PASS, `check_s21_gmu` PASS (스크립트는 세션 스크래치패드, 저장소 밖).
+- 기기 쓰기·부팅: 없음.
