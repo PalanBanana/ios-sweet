@@ -109,7 +109,7 @@
      "     'IOClass'         = IOPanicPlatform;"
 --- /dev/null
 +++ b/bsd/dev/sweet_rpmh.c
-@@ -0,0 +1,623 @@
+@@ -0,0 +1,627 @@
 +/*
 + * SWEET PM6150L L11C bring-up; see report.md for DT and source evidence.
 + * Sole XNU apps-DRV owner, called from thread context with deep idle disabled.
@@ -595,6 +595,7 @@
 +	static const char *const names[] = { "gfx.lvl", "cx.lvl", "mx.lvl" };
 +	uint32_t addr[3] = { 0, 0, 0 };
 +	bool found[3] = { false, false, false };
++	printf("\n\n=== SWEET FB STARTED: ARC QUERY BEGIN ===\n\n");
 +	printf("SWEET ARC: report start (sweetrpmhq=1)\n");
 +	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
 +		printf("SWEET ARC: report skipped (RPMh client busy)\n");
@@ -603,6 +604,9 @@
 +			printf("SWEET ARC: report skipped (previous uncertain RPMh transaction)\n");
 +		} else if (rh_map() != 0) {
 +			printf("SWEET ARC: report skipped (RPMh or cmd-db not mapped)\n");
++		} else if (!rh_rsc || !rh_tcs || !rh_dict || !rh_db) {
++			/* Guard: never read registers through an unmapped client. */
++			printf("SWEET ARC: RPMh client not mapped; queries skipped\n");
 +		} else {
 +			bool missing = false;
 +			for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
@@ -1201,26 +1205,25 @@
 +	IOPMPowerSource::free();
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
---- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
-+++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,11 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -139,6 +139,10 @@
  
- OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
+ OSDefineMetaClassAndStructors(IOMobileFramebufferUserClient, IOUserClient);
  
-+/* bsd/dev/sweet_rpmh.c: read-only ARC report, active with sweetrpmhq=1 only. */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +extern "C" void sweet_rpmh_arc_report(void);
 +#endif
 +
  bool
- SweetPlatformExpert::start(IOService *provider)
+ AppleCLCD::start(IOService *provider)
  {
-@@ -31,6 +36,10 @@
- 	}
+@@ -193,6 +197,10 @@
  	registerService();
- 	IOLog("SWEET: platform expert registered\n");
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
-+	/* Read-only ARC report for hardware validation. Nothing is written. */
++	/* Read-only ARC report for hardware validation (sweetrpmhq=1). Nothing is written. */
 +	sweet_rpmh_arc_report();
 +#endif
  	return true;
