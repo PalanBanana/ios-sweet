@@ -194,7 +194,7 @@ diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
  
  	if (debug_boot_arg) {
  		patch_low_glo();
-@@ -535,9 +536,23 @@
+@@ -535,9 +536,15 @@
  	PE_consistent_debug_inherit();
  
  	/* Setup debugging output. */
@@ -204,14 +204,6 @@ diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
  	kernel_startup_initialize_upto(STARTUP_SUB_KPRINTF);
  	kprintf("kprintf initialized\n");
 +	sweet_early_mark(20, "kprintf startup complete");
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
-+	/*
-+	 * Read-only ARC report (sweetrpmhq=1). It runs first after kprintf: no UFS, battery or
-+	 * touch dependency, and kprintf reaches the framebuffer console from here on.
-+	 */
-+	extern void sweet_rpmh_arc_report(void);
-+	sweet_rpmh_arc_report();
-+#endif
 +	if (serial_exists) {
 +		sweet_early_disable();
 +	}

@@ -1201,3 +1201,28 @@
 +	IOPMPowerSource::free();
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -22,6 +22,11 @@
+ 
+ OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
+ 
++/* bsd/dev/sweet_rpmh.c: read-only ARC report, active with sweetrpmhq=1 only. */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern "C" void sweet_rpmh_arc_report(void);
++#endif
++
+ bool
+ SweetPlatformExpert::start(IOService *provider)
+ {
+@@ -31,6 +36,10 @@
+ 	}
+ 	registerService();
+ 	IOLog("SWEET: platform expert registered\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* Read-only ARC report for hardware validation. Nothing is written. */
++	sweet_rpmh_arc_report();
++#endif
+ 	return true;
+ }
+ 
