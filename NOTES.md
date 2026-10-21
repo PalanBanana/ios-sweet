@@ -8,6 +8,7 @@
 - **검증 상태:** 첫 CI run은 PASS였다 (로그 `run.log`, 2026-10-19 13:06Z): 적용 88 (ours 84 + blacktop 4), 실패 0, 스테이지 3/3, 진단 0, step 오류 0. 빌드한 커밋과 실행 ID는 로그에 없다 (`fd539b9`로 추정, 미확인). 커널 아티팩트에 `MsmGpuAdreno618` 클래스 문자열이 있다 (바이너리 grep 25건). **세션 12의 0082 재작성 (`f6bdb2b`)은 CI에서 컴파일되지 않았다.** 0081 빌드 기록은 없다.
 - **다음:** `ci-validate/v1`을 포크에서 빌드 (CI-TRIGGER.md). 로드맵은 ROADMAP.md.
 - **세션 5 수정 이력 (2026-10-19):** 게이트는 값 1일 때만 열림 (`21b42d0`). zap 로더 미구현이면 ring 전에 실패. 패치 skip은 `tools/check-patch-log.sh`가 CI에서 검사 (`66ea9a5`). SWEET 가드 (`723c65b`). 로컬 `origin` push URL DISABLED.
+- **세션 24 (2026-10-21): ARC 보고 호출을 `arm_init.c` stage 20 직후로 옮기고 요약 배너를 추가했다 (`0012` hunk + `0062`). SweetBattery 호출은 제거. 기기 확인 전. 상세: '세션 24' 절.**
 - **세션 23 (2026-10-20): ARC 보고 출력 경로 수정. 화면 출력은 kprintf (fbcon). EARLY 콘솔은 stage 20 뒤에 꺼진다 (`serial_exists`). 조회는 `SweetBattery::start()`에서 읽기 전용으로 실행하도록 옮겼다. DT에 ARC 주소가 없어서 주소 하드코딩은 하지 않았다. 상세: '세션 23' 절.**
 - **세션 22 (2026-10-20): SQE 형식 결정 (`has_whereami = true`, 업스트림 규칙과 `adreno_fw_create_bo` 오프셋 확인). 정정: 세션 19–20의 "dw0 = 0 구버전" 판정은 오프셋 오류였다. 기기 ARC 진단 (Task A)은 차단 (CI 빌드 없음, adb 셸 권한 거부). RPMh 투표, SMMU 페이지 테이블, 0082 통합은 구현 완료 (게이트 뒤, 기본 꺼짐, 실기 미검증). 상세: '세션 22' 절.**
 - **세션 21 (2026-10-20): RPMh ARC 조회 `6a5a199` (`sweetrpmhq=1`, 읽기 전용), GMU 창 매핑 `c656f77` (읽기·쓰기 없음), gpu_region 위험 철회, `a618_gmu.bin` 로더 설계 (코드 없음). 체인 84/84, 로컬 검사 PASS. 기기 쓰기·부팅 없음. 다음 결정: 로더 운반 경로 (R1 RAM 페이로드 또는 R2 no-map 영역)와 XNU 예약 경로 확인. 승인 요청 (세션 22): ARC 부팅 진단 (권장 승인), SQE 조사용 인터넷 (승인 필요), 부팅 DT 진단 (권장 보류). 상세: '세션 21' 절.**
@@ -34,6 +35,16 @@
 | 0083 Wi-Fi (`Wcn3990Controller`) | SNOC+QMI 구조 완료, stub 상태 | QRTR (deferred) |
 | 0084 Audio (`SweetWcd9375Audio`) | 미착수 (P0에서 반증만 기록) | SoundWire 설계 (deferred) |
 
+
+### 세션 24 (2026-10-21): ARC 보고를 stage 20 직후로 이동, 요약 배너
+
+- 호출: `osfmk/arm/arm_init.c`, stage 20 `kprintf startup complete` 뒤, `ARM64_BOARD_CONFIG_SWEET` 가드 안 (`0012` 패치의 arm_init hunk). 요청에 적힌 경로 `xnu/pexpert/pexpert/arm64/arm_init.c`는 이 트리에 없다.
+- 확인: `io_map()`은 `STARTUP_SUB_KMEM` 전에 early VA를 `pmap_map_bd`로 쓴다 (`osfmk/arm/io_map.c`). 그래서 stage 20에서 `ml_io_map`이 안전하다. fbcon도 stage 18에 같은 경로를 쓴다.
+- 출력: 시작 줄 `SWEET ARC: report start (sweetrpmhq=1)`, 상세 줄 (aux 16개씩 줄바꿈), 마지막에 배너. 배너는 `SWEET ARC: gfx.lvl addr=…`, `cx.lvl`, `mx.lvl` (없으면 `addr=none`)이다. 배너를 마지막에 둔 이유: fbcon은 감싸며 최신 줄이 커서 근처에 남는다.
+- `SweetBattery::start()`의 호출과 extern은 제거했다. SweetBattery 섹션은 세션 23 이전과 바이트 단위로 같다.
+- 검사: 체인 84/84 (스테이지 스크립트 3개 포함). 체인 러너와 fakebin은 스크래치패드가 초기화되어 새로 만들었다. 스텁 컴파일 `sweet_rpmh.c` 경고 0, 오류 0. 가짜 cmd-db 호스트 테스트: 상세 줄과 배너 (gfx 0x30200, cx 0x30300, mx none)를 확인했다.
+- 미확인: 기기. 화면에 `report start`가 안 보이면 stage 20 직후 멈춘 것이다. `SWEET RPMH: rsc=…` 줄이 보이면 RPMh 읽기까지 간 것이고, 안 보이면 호출 직후 (kprintf 또는 `rh_lock`)에서 멈춘 것이다.
+- 참고: 화면의 `SWEET EARLY 20` 뒤에 kprintf 줄이 하나도 나오지 않는다면 fbcon 출력 자체의 문제다 (stage 20 뒤 EARLY는 `serial_exists`로 꺼진다).
 
 ### 세션 23 (2026-10-20): ARC 보고 출력 경로 수정 (화면 kprintf), 읽기 전용 보고를 SweetBattery 시작으로 이동
 

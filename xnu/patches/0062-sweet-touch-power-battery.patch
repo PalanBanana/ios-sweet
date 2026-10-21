@@ -109,12 +109,12 @@
      "     'IOClass'         = IOPanicPlatform;"
 --- /dev/null
 +++ b/bsd/dev/sweet_rpmh.c
-@@ -0,0 +1,608 @@
+@@ -0,0 +1,623 @@
 +/*
 + * SWEET PM6150L L11C bring-up; see report.md for DT and source evidence.
 + * Sole XNU apps-DRV owner, called from thread context with deep idle disabled.
 + * No sleep/wake programming, SPMI writes, GIC handler, or timeout recovery.
-+ * sweetrpmhq=1 (boot-arg, exact value 1) prints a read-only ARC report from SweetBattery::start().
++ * sweetrpmhq=1 (boot-arg, exact value 1) prints a read-only ARC report from arm_init.c, stage 20.
 + * sweetrpmh=1 (boot-arg, exact value 1) lets sweet_rpmh_arc_vote send ARC votes. Without it
 + * the call only looks the resource up. A vote is still refused until its level is verified.
 + */
@@ -486,8 +486,9 @@
 + * It writes nothing: no RSC, TCS or cmd-db store is touched.
 + */
 +static int
-+rh_arc_query_one(const char *res)
++rh_arc_query_one(const char *res, uint32_t *addr_out)
 +{
++	*addr_out = 0;
 +	uint32_t key[2] = {0, 0};
 +	for (unsigned i = 0; i < 8 && res[i]; ++i) {
 +		key[i / 4] |= (uint32_t)(uint8_t)res[i] << (8u * (i % 4));
@@ -514,6 +515,7 @@
 +			}
 +			++matches;
 +			uint32_t addr = rh_read(rh_db, e + 16);
++			*addr_out = addr;
 +			unsigned auxlen = rh_db16(e + 20);
 +			uint32_t auxoff = aux + rh_db16(e + 22);
 +			printf("SWEET ARC: %s addr=%#x slave=%u aux-len=%u prio=%#x:%#x%s\n",
@@ -579,9 +581,9 @@
 +}
 +
 +/*
-+ * sweetrpmhq=1 (boot-arg, exact value 1): read-only ARC report, called from SweetBattery::start()
-+ * at IOKit startup. The RPMh client is mapped here if the vote path has not done it. Nothing is
-+ * written. kprintf reaches the framebuffer once the sweet-fbcon console is registered.
++ * sweetrpmhq=1 (boot-arg, exact value 1): read-only ARC report, called once from arm_init.c right
++ * after kprintf starts (stage 20). It needs no UFS, battery or touch hardware. The RPMh client is
++ * mapped here if needed, and nothing is written. The summary at the end is the last output.
 + */
 +void
 +sweet_rpmh_arc_report(void)
@@ -590,26 +592,39 @@
 +	if (!PE_parse_boot_argn("sweetrpmhq", &value, (int)sizeof(value)) || value != 1) {
 +		return;
 +	}
++	static const char *const names[] = { "gfx.lvl", "cx.lvl", "mx.lvl" };
++	uint32_t addr[3] = { 0, 0, 0 };
++	bool found[3] = { false, false, false };
 +	printf("SWEET ARC: report start (sweetrpmhq=1)\n");
 +	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
 +		printf("SWEET ARC: report skipped (RPMh client busy)\n");
-+		return;
-+	}
-+	if (rh_poisoned) {
-+		printf("SWEET ARC: report skipped (previous uncertain RPMh transaction)\n");
-+	} else if (rh_map() != 0) {
-+		printf("SWEET ARC: report skipped (RPMh or cmd-db not mapped)\n");
 +	} else {
-+		static const char *const names[] = { "gfx.lvl", "cx.lvl", "mx.lvl" };
-+		bool missing = false;
-+		for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
-+			missing |= rh_arc_query_one(names[n]) != 0;
++		if (rh_poisoned) {
++			printf("SWEET ARC: report skipped (previous uncertain RPMh transaction)\n");
++		} else if (rh_map() != 0) {
++			printf("SWEET ARC: report skipped (RPMh or cmd-db not mapped)\n");
++		} else {
++			bool missing = false;
++			for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
++				found[n] = rh_arc_query_one(names[n], &addr[n]) == 0;
++				missing |= !found[n];
++			}
++			if (missing) {
++				rh_arc_list();
++			}
 +		}
-+		if (missing) {
-+			rh_arc_list();
++		__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
++	}
++	/* Summary last: the newest kprintf lines stay on the framebuffer longest. */
++	printf("\n\n==================================\n");
++	for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
++		if (found[n]) {
++			printf("SWEET ARC: %s addr=%#x\n", names[n], addr[n]);
++		} else {
++			printf("SWEET ARC: %s addr=none\n", names[n]);
 +		}
 +	}
-+	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
++	printf("==================================\n\n");
 +}
 +
 +/* sweetrpmh=1 (boot-arg, exact value 1): the only way an ARC vote reaches a TCS. */
@@ -866,7 +881,7 @@
 +#endif
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetBattery.cpp
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,319 @@
 +/*
 + * Built-in iOS battery bring-up service. Default: 100%, AC, not charging.
 + * sweetbattery=1: read-only PM6150 polling every 30 seconds; voltage-derived
@@ -884,8 +899,6 @@
 +/* bsd/dev/sweet_spmi.c */
 +extern "C" int sweet_spmi_init(void);
 +extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
-+/* bsd/dev/sweet_rpmh.c: read-only ARC report, active with sweetrpmhq=1 only. */
-+extern "C" void sweet_rpmh_arc_report(void);
 +
 +class SweetBattery : public IOPMPowerSource {
 +	OSDeclareDefaultStructors(SweetBattery);
@@ -1133,8 +1146,6 @@
 +	if (!IOPMPowerSource::start(provider)) {
 +		return false;
 +	}
-+	/* Read-only ARC report for hardware validation. Nothing is written. */
-+	sweet_rpmh_arc_report();
 +	int real = 0;
 +	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
 +	fReal = real == 1 && sweet_spmi_init() == 0;
